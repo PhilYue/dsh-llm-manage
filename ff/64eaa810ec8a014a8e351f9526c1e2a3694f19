@@ -1,0 +1,16 @@
+README.md
+  h_91607200206e3a 93-116
+verify.mjs
+  h_91607200206e3a 262-300,320-321,330-368
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ff64eaa810ec8a014a8e351f9526c1e2a3694f19",
+  "prompts": {},
+  "humans": {
+    "h_91607200206e3a": {
+      "author": "PhilYue <phil_yue@yeah.net>"
+    }
+  }
+}
