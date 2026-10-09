@@ -110,7 +110,21 @@ Health is learned cheapest-first instead:
 2. real request failures as they happen (passive, zero extra traffic),
 3. explicit probes the user starts, throttled at `probe.intervalMs` and capped at `probe.batch`.
 
-A model that has never been attempted reads as `unknown`, never as usable.
+Each row's status is the strongest evidence available, in this order:
+
+| Status | Means | Shown when |
+|---|---|---|
+| `retired` | the gateway no longer lists the model | the directory read succeeded and the model is absent from it |
+| the recorded health | a probe or a real request produced a verdict | any health record exists for that route+model |
+| `ok` | the gateway lists it, and no failure is known | the directory read succeeded and there is no health record |
+| `unknown` | nothing is known | the route exposes no `baseURL`, so there is no directory to compare against |
+
+`ok` therefore means "listed and not known to be broken", which is weaker than "verified
+working" — a model can be advertised and still fail on first use. The panel keeps the
+distinction visible by showing the source alongside the status, so a row reads
+**usable · deep probe** once it has actually answered and **usable · never checked** while it
+has not. Neither is hidden: the second is the honest label for the majority of a large
+catalogue, because verifying all of it at once is what would rate-limit you out.
 
 ## Verifying it
 
