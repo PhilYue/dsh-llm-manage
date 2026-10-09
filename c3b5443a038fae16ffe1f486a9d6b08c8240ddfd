@@ -1,0 +1,42 @@
+.gitignore
+  h_91607200206e3a 1-15
+LICENSE
+  h_91607200206e3a 1-21
+README.md
+  h_91607200206e3a 1-255
+client.js
+  h_91607200206e3a 1-878
+cordis.patch.yml
+  h_91607200206e3a 1-35
+icon.svg
+  h_91607200206e3a 1-16
+index.js
+  h_91607200206e3a 1-1134
+locale/en.json
+  h_91607200206e3a 1-6
+locale/zh.json
+  h_91607200206e3a 1-6
+package.json
+  h_91607200206e3a 1-49
+preview.mjs
+  h_91607200206e3a 1-169
+verify-browser.mjs
+  h_91607200206e3a 1-236
+verify-client.mjs
+  h_91607200206e3a 1-337
+verify-env.mjs
+  h_91607200206e3a 1-265
+verify.mjs
+  h_91607200206e3a 1-371
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c3b5443a038fae16ffe1f486a9d6b08c8240ddfd",
+  "prompts": {},
+  "humans": {
+    "h_91607200206e3a": {
+      "author": "PhilYue <phil_yue@yeah.net>"
+    }
+  }
+}
