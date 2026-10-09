@@ -1,0 +1,35 @@
+# Bundle patch layer for dsh-llm-manage.
+#
+# One Host row loads ./index.js, which owns the persistent model overlay
+# (favorites, pins, hidden rows, recent use), per-model observed health, the
+# gateway directory reconcile, and the quota fallback chain. The `dsh.client`
+# declaration in package.json makes the web shell load ./client.js as the
+# browser half; it renders the management panel on the provider card, the
+# fallback banner, and the managed model picker.
+#
+# Every value below is a default. Override any of them here and the user's
+# patch layer keeps the override across upgrades.
+- insert:
+    - id: llm-manage
+      name: 'dsh-llm-manage'
+      config:
+        # 'managed' shadows the shipped composer picker at priority -1 so
+        # favorites and pins are reachable without scrolling. Set 'native' to
+        # withdraw the shadow and get the shipped picker back untouched.
+        selector:
+          mode: managed
+        # Deep probes spend the gateway's per-key rate budget, so they are
+        # deliberately manual and serialised. See README before raising `batch`.
+        probe:
+          intervalMs: 1200
+          timeoutMs: 30000
+          batch: 40
+        directory:
+          # How long a GET {baseURL}/models result is trusted before the next
+          # inventory read refreshes it.
+          ttlMs: 1800000
+        fallback:
+          # Automatic model switching when one model's quota is exhausted.
+          # '' means "derive the chain from pins/favorites, then catalog order".
+          enabled: true
+          chain: []
