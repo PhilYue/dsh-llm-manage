@@ -90,6 +90,30 @@ A model-scoped failure moves to another model, because a different model can ser
 turn. An account-scoped failure never moves: every model shares that key, so switching
 would only hide the real problem and burn another request.
 
+### A probe is not a routing event
+
+"Unusable" and "move the conversation" are two different conclusions, and only a **failed
+request** reaches the second one:
+
+- A **failed request** (`agent/request-error`) is the live conversation hitting a wall. If
+  the failure is model-scoped, the turn is retried on the next usable model and a banner
+  names the model it moved for.
+- A **failed probe** is an answer to a question you asked about a model. It records that
+  model's health — so the *next* real switch skips it — but it does **not** touch whichever
+  session happens to be using it. Moving a live conversation because of a diagnostic you
+  ran would be switching models behind your back, which is the thing this design forbids.
+
+Concretely, with `model-gamma` selected and its quota exhausted:
+
+| Event | Selected model afterwards |
+|---|---|
+| you deep-probe `model-gamma`, and the probe fails | still `model-gamma` |
+| a real request on `model-gamma` fails with per-model quota | `model-beta` (next usable), banner shown |
+| a real request fails with an account-wide key limit (2008) | still `model-gamma` |
+
+At most three automatic switches happen per turn, and if the chain finds nothing usable the
+failure is passed through untouched rather than retried in a way that cannot succeed.
+
 Some gateways report a *model's* quota exhaustion as HTTP 429, which the harness's own
 classifier maps to a retryable `RATE_LIMIT` — indistinguishable from an account-wide rate
 limit. The two need opposite handling, so this plugin reads the gateway's numeric business
