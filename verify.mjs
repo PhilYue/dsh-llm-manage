@@ -259,6 +259,45 @@ async function observe(target, model) {
   }
 }
 
+/**
+ * Run the request waterfall and report the model it settles on.
+ *
+ * The waterfall is applied in order, so the last decision is the one the loop
+ * would actually send — which is what makes this a direct observation of a switch
+ * rather than an inference from a counter.
+ *
+ * @param {object} target - the agent to dispatch for.
+ * @param {string} model - the model the caller asked for.
+ * @returns {Promise<string>} the model the loop would use.
+ */
+async function observeAndRead(target, model) {
+  let decision = { provider: ROUTE, model }
+  for (const l of listeners['agent/request'] ?? []) {
+    decision = await l.call({}, { agent: target, turn: 1, step: 1, signal: new AbortController().signal },
+      () => Promise.resolve(decision))
+  }
+  return decision.model
+}
+
+/**
+ * Fire one `agent/request-error` and return what the loop was told to do.
+ * @param {object} target - the agent whose request failed.
+ * @param {object} failure - the failure the harness reported.
+ * @returns {Promise<unknown>} the waterfall's action.
+ */
+async function fireError(target, failure) {
+  const payload = {
+    agent: target, turn: 1, step: 1, provider: ROUTE, failure,
+    retryPolicy: { mode: 'normal', maxRetries: 3, retryableCodes: ['RATE_LIMIT'] },
+    signal: new AbortController().signal,
+  }
+  let action
+  for (const l of listeners['agent/request-error'] ?? []) {
+    action = await l.call({}, payload, () => Promise.resolve(action))
+  }
+  return action
+}
+
 // Error bodies are constructed here rather than pasted from one deployment's
 // capture: the classifier keys on a numeric code and on the wording, so the
 // suite supplies exactly those and nothing that fingerprints a specific gateway.
@@ -278,18 +317,8 @@ const CASES = [
 for (const [index, c] of CASES.entries()) {
   const caseAgent = AGENT_FOR(index + 1)
   await observe(caseAgent, c.model)
-  const payload = {
-    agent: caseAgent, turn: 1, step: 1, provider: ROUTE,
-    failure: { message: c.message, code: c.code, status: c.status },
-    retryPolicy: { mode: 'normal', maxRetries: 3, retryableCodes: ['RATE_LIMIT'] },
-    signal: new AbortController().signal,
-  }
-  let retry = false
-  for (const l of listeners['agent/request-error'] ?? []) {
-    const action = await l.call({}, payload, () => Promise.resolve(undefined))
-    if (action && action.kind === 'retry') retry = true
-  }
-  check(c.label, retry === c.retry, `retry=${retry}`)
+  const action = await fireError(caseAgent, { message: c.message, code: c.code, status: c.status })
+  check(c.label, (action?.kind === 'retry') === c.retry, `retry=${action?.kind === 'retry'}`)
 }
 
 // ── a switch must be visible to the conversation it happened in ─────────────
@@ -297,6 +326,45 @@ const log = await call({ action: 'fallbackLog', sessionId: 'sess-1' })
 check('fallback banner data is scoped to the switched session',
   log.body?.value?.from?.model !== undefined && log.body?.value?.to?.model !== undefined)
 check('an unrelated session gets no banner', (await call({ action: 'fallbackLog', sessionId: 'sess-never-used' })).body?.value === null)
+
+// ── a probe is not a routing event ──────────────────────────────────────────
+// The two are easy to conflate because both end in a verdict of "unusable", but
+// only one moves the session. A probe is an explicit question the user asked
+// about a model; treating its answer as a reason to move the live conversation
+// would switch models behind the user's back, which is exactly the silent
+// substitution the design forbids.
+//
+// The model is switched IN THE FIXTURE only — the synthetic gateway answers 200 to
+// every completion so the happy path can run, and a probe cannot fail against it.
+// Rejecting just the completion call is what makes "the probe failed" a real event.
+{
+  const probeAgent = AGENT_FOR(90)
+  await observe(probeAgent, at(2))
+  const healthyGateway = globalThis.fetch
+  globalThis.fetch = async (url, init) => String(url).includes('/chat/completions')
+    ? new Response(JSON.stringify({ error: { code: 2007, message: 'quota exhausted' } }),
+        { status: 429, headers: { 'content-type': 'application/json' } })
+    : healthyGateway(url, init)
+  const failedProbe = await call({ action: 'probe', route: ROUTE, model: at(2) })
+  globalThis.fetch = healthyGateway
+  check('a probe against a rejecting gateway really fails', failedProbe.body?.ok === true
+    && /quota/i.test(String(failedProbe.body?.value?.detail ?? '')), String(failedProbe.body?.value?.detail ?? '').slice(0, 60))
+
+  // The session that was using that very model must stay on it.
+  const afterProbe = await observeAndRead(probeAgent, at(2))
+  check('a failing probe does NOT switch the session\'s model', afterProbe === at(2),
+    `${at(2)} -> ${afterProbe}`)
+  check('a failing probe produces no fallback banner',
+    (await call({ action: 'fallbackLog', sessionId: probeAgent.id })).body?.value === null)
+
+  // It is still remembered: the verdict must steer the NEXT real switch away.
+  const laterAgent = AGENT_FOR(91)
+  await observe(laterAgent, at(3))
+  await fireError(laterAgent, { message: JSON.stringify({ error: { code: 4010, message: 'model not found' } }), code: 'INVALID_REQUEST', status: 400 })
+  const chosen = await observeAndRead(laterAgent, at(3))
+  check('a probed-unusable model is skipped by a later chain', chosen !== at(2),
+    `avoided ${at(2)}, chose ${chosen}`)
+}
 
 // ── pins / favorites / hidden persist and reorder ───────────────────────────
 for (const [model, list, on] of [[at(1), 'pins', true], [at(0), 'favorites', true], [at(2), 'hidden', true]]) {
