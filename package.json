@@ -1,0 +1,49 @@
+{
+  "name": "dsh-llm-manage",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Model inventory, health reasons and quota fallback for DSH LLM provider routes",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "docs/*.png",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-model-selection"
+      ]
+    },
+    "manifestVersion": 1
+  },
+  "license": "MIT",
+  "author": "PhilYue <phil_yue@yeah.net>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/PhilYue/dsh-llm-manage.git"
+  },
+  "bugs": {
+    "url": "https://github.com/PhilYue/dsh-llm-manage/issues"
+  },
+  "homepage": "https://github.com/PhilYue/dsh-llm-manage#readme"
+}

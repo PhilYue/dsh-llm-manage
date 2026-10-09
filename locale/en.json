@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Model Manager",
+    "description": "Pins favorite models to the top, records why each model is unusable, reconciles the gateway's live directory, and switches models automatically when one model's quota runs out."
+  }
+}
