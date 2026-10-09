@@ -1,0 +1,14 @@
+package.json
+  h_91607200206e3a 45-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "19d69e61d0c9b3d24231f51383cb503c08f18593",
+  "prompts": {},
+  "humans": {
+    "h_91607200206e3a": {
+      "author": "PhilYue <phil_yue@yeah.net>"
+    }
+  }
+}
