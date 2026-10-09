@@ -42,6 +42,10 @@
     "manifestVersion": 1
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "author": "PhilYue <phil_yue@yeah.net>",
   "repository": {
     "type": "git",
