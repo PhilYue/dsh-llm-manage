@@ -1,0 +1,14 @@
+README.md
+  h_91607200206e3a 113-127
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ab15241b48e8dfc8b3919614e92dbf1d1f33eef0",
+  "prompts": {},
+  "humans": {
+    "h_91607200206e3a": {
+      "author": "PhilYue <phil_yue@yeah.net>"
+    }
+  }
+}
