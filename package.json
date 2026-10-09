@@ -18,6 +18,11 @@
     "locale/*.json",
     "icon.svg",
     "docs/*.png",
+    "verify-env.mjs",
+    "verify.mjs",
+    "verify-client.mjs",
+    "verify-browser.mjs",
+    "preview.mjs",
     "README.md",
     "LICENSE"
   ],
