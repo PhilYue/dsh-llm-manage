@@ -219,6 +219,27 @@ const PAGE = `<!doctype html>
                   + ':' + section.querySelectorAll('.llmm-route').length
               })
               log('pickerLabelsPerSection=' + perSectionLabels.join(','))
+
+              // The picker must be the panel's design, not a second one. Compared
+              // through getComputedStyle in a real engine, so this resolves the
+              // cascade AND the theme variables: a declaration that never wins
+              // cannot pass here the way it could when read from stylesheet text.
+              var panelRow = document.querySelector('.llmm-row')
+              var pickerRow = menu.querySelector('.llmm-item')
+              if (!panelRow || !pickerRow) { log('FAIL no row to compare') } else {
+                var panelStyle = getComputedStyle(panelRow)
+                var pickerStyle = getComputedStyle(pickerRow)
+                var shared = ['display', 'alignItems', 'gap', 'fontSize',
+                  'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+                  'borderTopLeftRadius', 'borderTopWidth', 'borderTopStyle']
+                var styleDiff = shared.filter(function (prop) {
+                  return panelStyle[prop] !== pickerStyle[prop]
+                }).map(function (prop) {
+                  return prop + ':' + panelStyle[prop] + '!=' + pickerStyle[prop]
+                })
+                log('ROW_STYLE_DIFF=' + (styleDiff.length === 0 ? 'none' : styleDiff.join(',')))
+                log('ROW_STYLE_PROPS_COMPARED=' + shared.length)
+              }
               log('ROUTE_LABEL_NO_OVERLAP=' + labelled.every(function (item) {
                 var name = item.querySelector('.llmm-name').getBoundingClientRect()
                 var route = item.querySelector('.llmm-route').getBoundingClientRect()
@@ -363,6 +384,14 @@ check('only a route-spanning section prints route labels',
 check('a route label never overlaps the model name', line('ROUTE_LABEL_NO_OVERLAP') === 'true')
 check('a route label fits inside its row', line('ROUTE_LABEL_WITHIN_ROW') === 'true')
 check('the menu does not scroll horizontally', line('MENU_ROW_NO_HSCROLL') === 'true')
+
+// The picker and the panel must compute to one design. Asserted on computed styles
+// in a real engine, where the cascade and the theme variables are resolved, so this
+// catches a rule that is present in the stylesheet but never actually applied.
+check('a picker row computes identically to a panel row',
+  line('ROW_STYLE_DIFF') === 'none',
+  `${line('ROW_STYLE_DIFF')} (${num('ROW_STYLE_PROPS_COMPARED')} properties compared)`)
+
 
 const failed = results.filter(r => !r.passed)
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`)

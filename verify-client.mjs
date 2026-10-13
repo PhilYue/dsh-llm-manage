@@ -453,6 +453,77 @@ check('a lifted section on one route names none',
   favoriteSection.items.length > 0 && favoriteSection.items.every(row => row.route === ''),
   favoriteSection.items.map(row => `${row.name}${row.route === '' ? '' : `[${row.route}]`}`).join(', '))
 
+// ── the picker and the panel must stay one design ───────────────────────────
+// The picker is the newer surface, and it drifted: a 10px menu radius against the
+// panel's 8px, rows padded 5px 8px against 4px 6px, a hover that changed the
+// background but not the border, rows dimmed to .6 where the panel dims to .55, and
+// a brand-tinted section heading the panel never uses. None of that is visible in a
+// functional test, and all of it is visible side by side. So the shared properties
+// are asserted equal here rather than left to review.
+//
+// Read from the rendered <style> element, not from the source: that is the CSS the
+// browser actually receives, so a rule that never reaches the page cannot pass.
+const cssText = Array.from(container.querySelectorAll('style')).map(node => node.textContent ?? '').join('\n')
+/** One rule's declarations, matched by exact selector text. */
+const declarationsOf = (selector) => {
+  for (const chunk of cssText.split('}')) {
+    const brace = chunk.indexOf('{')
+    if (brace === -1) continue
+    if (chunk.slice(0, brace).trim() === selector) {
+      return Object.fromEntries(chunk.slice(brace + 1).trim().split(';').filter(Boolean).map((entry) => {
+        const colon = entry.indexOf(':')
+        return [entry.slice(0, colon).trim(), entry.slice(colon + 1).trim()]
+      }))
+    }
+  }
+  return null
+}
+const panelRow = declarationsOf('.llmm-row')
+const pickerRow = declarationsOf('.llmm-item')
+const boxProperties = ['display', 'align-items', 'gap', 'padding', 'border-radius', 'border']
+const mismatch = panelRow === null || pickerRow === null
+  ? 'a rule was not found in the rendered stylesheet'
+  : boxProperties.filter(key => panelRow[key] !== pickerRow[key])
+    .map(key => `${key}: panel "${panelRow[key]}" vs picker "${pickerRow[key]}"`).join('; ')
+check('a picker row is laid out exactly like a panel row', mismatch === '',
+  mismatch || boxProperties.map(key => `${key}=${pickerRow[key]}`).join(' '))
+
+const hoverMismatch = ['background', 'border-color'].filter(key =>
+  declarationsOf('.llmm-row:hover')[key] !== declarationsOf('.llmm-item:hover')[key])
+check('a picker row reacts to hover exactly like a panel row', hoverMismatch.length === 0,
+  hoverMismatch.join(', ') || declarationsOf('.llmm-item:hover')['background'])
+
+const panelDim = declarationsOf('.llmm-row.llmm-hidden').opacity
+const pickerDim = declarationsOf('.llmm-item.llmm-down').opacity
+check('both surfaces dim a de-emphasised row by the same amount', panelDim === pickerDim,
+  `panel ${panelDim} vs picker ${pickerDim}`)
+
+// Keyboard focus is the one interaction the panel states explicitly, on its icon
+// buttons; the picker's rows are the interactive element there, so they owe the
+// same outline rather than the browser default.
+check('a picker row shows the same focus ring as the panel\'s controls',
+  declarationsOf('.llmm-item:focus-visible')?.['outline']
+    === declarationsOf('.llmm-ibtn:focus-visible')?.['outline'],
+  `${declarationsOf('.llmm-item:focus-visible')?.['outline']}`)
+
+// Section headings are structural labels, so they take the panel's secondary-label
+// treatment. The panel reserves the brand color for state (an active control), and a
+// tinted heading would be the one place the two surfaces disagreed about that.
+check('section headings use the panel\'s heading treatment, not the brand color',
+  declarationsOf('.llmm-group')?.color === 'var(--dsw-alias-label-secondary)'
+  && declarationsOf('.llmm-group')?.['font-weight'] === '600'
+  && cssText.includes('.llmm-accent') === false,
+  `color=${declarationsOf('.llmm-group')?.color} weight=${declarationsOf('.llmm-group')?.['font-weight']} accentRule=${cssText.includes('.llmm-accent')}`)
+
+// The route label is the same kind of annotation as the panel's "also on" chip, so
+// it must be that chip rather than look like one. Asserted on the DOM, because a
+// check comparing .llmm-route's declarations against .llmm-chip's would pass even
+// if the two were unrelated — .llmm-route declares almost nothing of its own.
+const routeNodes = Array.from(pickerContainer.querySelectorAll('.llmm-route'))
+check('the route label is rendered as the panel\'s own chip',
+  routeNodes.length > 0 && routeNodes.every(node => node.classList.contains('llmm-chip')),
+  `${routeNodes.length} route labels, ${routeNodes.filter(n => n.classList.contains('llmm-chip')).length} of them chips`)
+
 // Selecting a lifted row must ask for THAT row's route and model. A row lifted
 // out of a non-primary route is exactly where the route could get dropped and the
 // click would silently select the same model on the wrong gateway.

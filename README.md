@@ -244,6 +244,13 @@ too — but it is still *selectable*. The plugin's view of a model can be stale,
 model from the picker is the one thing this design refuses to do silently. Search filters
 across the lifted sections as well as the route groups.
 
+The picker is styled from the panel's own vocabulary rather than as a separate design: the
+same row box (padding, radius, hover background **and** hover border), the same dimming for
+a de-emphasised row, the same focus ring, the same `.llmm-chip` for the route as the panel
+uses for "also on", and section headings in the secondary label color. The brand color stays
+reserved for state — the panel's active controls and the picker's current row. Two suites
+assert this property by property, so the two surfaces cannot drift apart again.
+
 ### Panel controls
 
 Row actions are **icon-only** buttons with the label on hover and on keyboard focus, so

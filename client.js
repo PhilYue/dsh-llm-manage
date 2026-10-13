@@ -306,18 +306,21 @@ window.__ModuleLoader__.load({
 .llmm-trigger:hover{border-color:var(--dsw-alias-border-l2)}
 .llmm-trigger.llmm-locked{opacity:.55;cursor:default}
 .llmm-trigger-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.llmm-menu{position:fixed;z-index:60;width:min(520px,92vw);max-height:min(440px,70vh);display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-overlay);box-shadow:0 12px 32px rgba(0,0,0,.18);overflow:hidden;font-size:12px;color:var(--dsw-alias-label-primary)}
+.llmm-menu{position:fixed;z-index:60;width:min(520px,92vw);max-height:min(440px,70vh);display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-overlay);box-shadow:0 12px 32px rgba(0,0,0,.16);overflow:hidden;font-size:12px;color:var(--dsw-alias-label-primary)}
 .llmm-menu-head{padding:8px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;gap:8px;align-items:center}
 .llmm-input{font:inherit;flex:1;padding:5px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}
+.llmm-input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .llmm-menu-body{overflow:auto;padding:4px}
 .llmm-group{position:sticky;top:0;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-secondary);padding:6px 8px 2px;font-weight:600}
-.llmm-group.llmm-accent{color:var(--dsw-alias-brand-primary)}
-.llmm-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.llmm-route{margin-left:auto;flex:none;font-size:11px;color:var(--dsw-alias-label-secondary)}
-.llmm-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;font:inherit;padding:5px 8px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer}
-.llmm-item:hover{background:var(--dsw-alias-bg-layer-1)}
+/* The route is the same kind of annotation as the panel's "also on" chip: extra
+   metadata about one model. Reusing .llmm-chip keeps the two surfaces agreeing on
+   how that looks instead of inventing a second treatment for it. */
+.llmm-route{margin-left:auto}
+.llmm-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;font:inherit;padding:4px 6px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer}
+.llmm-item:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l1)}
+.llmm-item:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .llmm-item.llmm-active{border-color:var(--dsw-alias-brand-primary)}
-.llmm-item.llmm-down{opacity:.6}
+.llmm-item.llmm-down{opacity:.55}
 .llmm-empty{padding:12px;color:var(--dsw-alias-label-secondary);text-align:center}
 .llmm-banner{display:flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-primary)}
 .llmm-banner b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
@@ -792,6 +795,11 @@ window.__ModuleLoader__.load({
        * @param {object} row - `{ route, model }`.
        * @param {boolean} showRoute - whether to name the route beside the model.
        * @returns {object} the row element.
+       *
+       * The arrangement follows the panel's row: dot, name, then the status chip
+       * immediately after the name. Chips stay adjacent to what they describe
+       * rather than drifting to the right edge, so a row reads the same way in both
+       * surfaces.
        */
       const renderItem = (row, showRoute) => {
         const overlayRow = overlay.get(`${row.route}/${row.model}`)
@@ -807,8 +815,10 @@ window.__ModuleLoader__.load({
         },
           h('span', { className: `llmm-dot ${statusTone(status)}` }),
           h('span', { className: 'llmm-name' }, row.model),
-          showRoute ? h('span', { className: 'llmm-route' }, row.route) : null,
           down ? h('span', { className: 'llmm-chip' }, statusLabel(status)) : null,
+          // The route chip takes the panel's "also on" slot: the same kind of
+          // annotation, pushed to the right edge by its own margin.
+          showRoute ? h('span', { className: 'llmm-chip llmm-route' }, row.route) : null,
           active ? h('span', { className: 'llmm-chip' }, t('selected')) : null,
         )
       }
@@ -818,11 +828,10 @@ window.__ModuleLoader__.load({
        * @param {string} key - stable React key.
        * @param {string} title - section heading.
        * @param {object[]} rows - the rows.
-       * @param {boolean} accent - whether to tint the heading.
        * @returns {object} the section element.
        */
-      const renderSection = (key, title, rows, accent) => h('div', { key },
-        h('div', { className: `llmm-group${accent ? ' llmm-accent' : ''}` }, `${title} (${rows.length})`),
+      const renderSection = (key, title, rows) => h('div', { key },
+        h('div', { className: 'llmm-group' }, `${title} (${rows.length})`),
         rows.map(row => renderItem(row, spansRoutes(rows))),
       )
 
@@ -865,13 +874,13 @@ window.__ModuleLoader__.load({
               // keeps its own section with those rows removed, so a model is never
               // listed twice and the menu still offers the whole catalogue.
               sections.pinned.length > 0
-                ? renderSection('llmm-pinned', t('sectionPinned'), sections.pinned, true)
+                ? renderSection('llmm-pinned', t('sectionPinned'), sections.pinned)
                 : null,
               sections.favorites.length > 0
-                ? renderSection('llmm-favorites', t('sectionFavorites'), sections.favorites, true)
+                ? renderSection('llmm-favorites', t('sectionFavorites'), sections.favorites)
                 : null,
               sections.groups.map(group => renderSection(
-                group.route, group.name || group.route, group.rows, false,
+                group.route, group.name || group.route, group.rows,
               )),
             ),
             failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,
