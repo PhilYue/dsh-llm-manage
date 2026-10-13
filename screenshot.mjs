@@ -153,17 +153,55 @@ for (const scheme of ['light', 'dark']) {
   if (!booted) { console.error(`screenshot: the plugin never booted in ${scheme}; nothing written`); continue }
   await sleep(1500)
 
-  // The plugin renders in two places: the settings panel (a wide surface) and the
-  // composer (where .llmm-root wraps only the 220px trigger). Only the former is worth
-  // The settings panel is NOT captured here. It registers into
-  // `settings.models.provider-card`, reachable only through the settings UI (its
-  // `settings.open` shortcut command ships with `binding: null`, so there is no key to
-  // send), and every other way to photograph it means constructing the page it renders
-  // in — which is the mistake that produced the grey card in the first place. Reported
-  // rather than silently skipped, so the absence is visible.
-  const panelWidth = await evaluate(`Math.round(document.querySelector('.llmm-root')?.getBoundingClientRect().width ?? 0)`)
-  console.log(`  panel   ${scheme}: not captured — the settings panel needs the settings UI; `
-    + `verify-browser.mjs asserts its computed design instead (composer root is ${panelWidth}px wide)`)
+  // The settings panel. It registers into `settings.models.provider-card`, so there is no
+  // URL for it and no element to query until the settings UI is open. It is opened the way
+  // a user opens it: the `settings.open` shortcut. On the web runtime that chord is
+  // primary+alt+Comma (ui-settings-general registers it per platform), so it is Cmd+Alt+,
+  // on macOS here — plain Cmd+, is the desktop runtime's binding and does nothing.
+  //
+  // Then the Models section is found by clicking candidate nav entries and keeping the one
+  // that reveals the panel, rather than matching a label: the labels are localised, and a
+  // screenshot tool that only works in one language is a screenshot tool that silently
+  // stops working.
+  for (const type of ['keyDown', 'char', 'keyUp']) {
+    await send('Input.dispatchKeyEvent', {
+      type, modifiers: 5, key: ',', code: 'Comma',
+      windowsVirtualKeyCode: 188, nativeVirtualKeyCode: 43,
+      text: type === 'char' ? ',' : undefined, unmodifiedText: ',',
+    }, sessionId)
+    await sleep(120)
+  }
+  await sleep(2000)
+
+  const panelReady = await evaluate(`(async () => {
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    if (document.querySelector('.llmm-panel') !== null) return true
+    const dialog = document.querySelector('[role="dialog"]')
+    if (dialog === null) return false
+    const nav = Array.from(dialog.querySelectorAll('button, [role="tab"]'))
+    for (const entry of nav) {
+      entry.click()
+      await wait(900)
+      if (document.querySelector('.llmm-panel') !== null) return true
+    }
+    return false
+  })()`)
+  if (panelReady !== true) {
+    console.log(`  panel   ${scheme}: not reachable — settings did not expose the panel`)
+  } else {
+    await evaluate(`document.querySelector('.llmm-panel').scrollIntoView({ block: 'center' })`)
+    await sleep(600)
+    const shot = await capture('.llmm-panel', 0, `panel${suffix}.png`)
+    console.log(shot === null ? `  panel   ${scheme}: not measurable`
+      : `  panel   ${scheme}: ${shot.width}x${shot.height} → docs/${shot.file}`)
+    // Leave the settings UI before photographing the composer, or the modal covers it.
+    await evaluate(`(() => {
+      const close = document.querySelector('[role="dialog"] [aria-label*="lose"], [role="dialog"] [aria-label*="关闭"]')
+      if (close) close.click()
+      return true
+    })()`)
+    await sleep(900)
+  }
 
   // Open the picker, then photograph the card itself. The card is portaled, so it is
   // not inside .llmm-root and has to be measured on its own.

@@ -214,6 +214,63 @@ async function main() {
   check('no service is reached without its inject declaration', injectErrors.length === 0,
     injectErrors.length === 0 ? 'none' : JSON.stringify(injectErrors[0].params).slice(0, 300))
 
+  // The panel is the other half of the plugin, and it lives behind the settings UI. If this
+  // ever stops resolving, screenshot.mjs silently writes no panel image and README links a
+  // file that is not regenerated — so the reachability itself is asserted here. The section
+  // is found by clicking nav entries and keeping the one that reveals the panel, because the
+  // labels are localised.
+  for (const type of ['keyDown', 'char', 'keyUp']) {
+    await send('Input.dispatchKeyEvent', {
+      type, modifiers: 5, key: ',', code: 'Comma',
+      windowsVirtualKeyCode: 188, nativeVirtualKeyCode: 43,
+      text: type === 'char' ? ',' : undefined, unmodifiedText: ',',
+    }, sessionId)
+    await sleep(120)
+  }
+  await sleep(1800)
+  const panel = await evaluate(`(async () => {
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+    const find = () => document.querySelector('.llmm-panel')
+    if (find() !== null) return { reached: true, width: Math.round(find().getBoundingClientRect().width) }
+    const dialog = document.querySelector('[role="dialog"]')
+    if (dialog === null) return { reached: false, why: 'the settings shortcut opened no dialog' }
+    for (const entry of dialog.querySelectorAll('button, [role="tab"]')) {
+      entry.click()
+      await wait(900)
+      if (find() !== null) return { reached: true, width: Math.round(find().getBoundingClientRect().width) }
+    }
+    return { reached: false, why: 'no section revealed the panel' }
+  })()`)
+  check('the settings panel is reachable through the real settings UI',
+    panel.reached === true && panel.width > 300,
+    panel.reached === true ? `.llmm-panel is ${panel.width}px wide` : panel.why)
+
+  // Still open: the panel card must not be painted with the scrim token either. Resolved
+  // through a probe element rather than read raw, because a bare custom property comes back
+  // as the literal text and a hex parser would silently yield null.
+  const panelSurface = await evaluate(`(() => {
+    const card = document.querySelector('.llmm-panel')
+    if (card === null) return null
+    const probe = document.createElement('div')
+    document.body.appendChild(probe)
+    probe.style.backgroundColor = 'var(--dsw-alias-bg-overlay)'
+    const scrim = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    return { painted: getComputedStyle(card).backgroundColor, scrim }
+  })()`)
+  if (panelSurface === null) check('the panel card avoids the overlay scrim', false, 'panel not open')
+  else {
+    const parse = (rgb) => {
+      const parts = (rgb.match(/[\d.]+/g) ?? []).map(Number)
+      return parts.length < 3 ? null : parts[0] * 0.299 + parts[1] * 0.587 + parts[2] * 0.114
+    }
+    const painted = parse(panelSurface.painted)
+    const scrim = parse(panelSurface.scrim)
+    check('the panel card avoids the overlay scrim',
+      painted !== null && scrim !== null && Math.abs(painted - scrim) > 4,
+      `painted=${panelSurface.painted} luma=${painted?.toFixed(0)} vs scrim=${panelSurface.scrim} luma=${scrim?.toFixed(0)}`)
+  }
+
   // The menu is the surface the pins/favorites work is about; assert its order on
   // the real catalogue, in whatever locale the browser reports.
   const menu = await evaluate(`(async () => {
