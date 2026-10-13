@@ -261,10 +261,13 @@ hand-written theme. That page defined `--dsw-alias-bg-overlay:#fff` — a value 
 has in the app, where it is `#e9ecf2` — and defined only the 14 tokens the plugin contract
 documents while the stylesheet reads 27. The mock showed a white card; the app painted a grey
 one. A preview that supplies its own theme cannot show you the theme, and an approved mock is
-worse than no mock: it is the reason the grey card shipped. The capture is skipped with a
-non-zero-free exit when no harness answers, so it never reports a picture it did not take.
-It also reports each file's laid-out height, which is how the README screenshots are sized
-instead of guessed. A development aid, not a test.
+worse than no mock: it is the reason the grey card shipped.
+
+The replacement supplies nothing of its own and skips with exit 0 when no harness answers, so
+it never reports a picture it did not take. To reach the panel it sends the `settings.open`
+chord — `primary+alt+Comma` on web, not the plain `primary+Comma` the desktop runtime uses —
+then clicks through the settings nav until the panel appears, matching no label because the
+labels are localised. A development aid, not a test.
 
 ## Where it appears
 
