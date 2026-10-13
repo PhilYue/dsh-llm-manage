@@ -5,11 +5,12 @@ manages the model inventory of a configured LLM route: pins and favorites, a per
 reason why each model is unusable, gateway directory reconciliation, and automatic
 fallback when one model's quota runs out.
 
-![The model management panel inside the Models settings page](docs/panel.png)
-
-*Captured from the installed plugin in a running harness — the real theme, the real
-catalogue, the real settings page. The capture supplies no theme of its own, which is
-deliberate; see [Looking at the panel without restarting](#looking-at-the-panel-without-restarting).*
+**No screenshots are committed, on purpose.** `screenshot.mjs` captures a *running* harness,
+so the images show whatever routes and model inventory that harness has — the maintainer's own
+deployment. A route name rendered into a PNG cannot be found by a text scan, which is how a
+set of them was published once. Run the script against your own harness (see
+[Looking at the panel without restarting](#looking-at-the-panel-without-restarting)) and you
+get your own routes, which is the only version of that picture that means anything to you.
 
 ## Why
 
@@ -253,8 +254,16 @@ DSH_LIVE_URL='http://127.0.0.1:3080/?token=…' node screenshot.mjs
 ```
 
 Captures the panel and the model picker out of the running harness, light and dark, into
-`docs/`. It is the preview of record because it supplies nothing: it opens the URL `dsh web`
-printed and photographs what is there.
+`docs/` — which is gitignored, so the images stay on your machine. It is the preview of record
+because it supplies nothing: it opens the URL `dsh web` printed and photographs what is there.
+
+The images are not committed because a capture of a real harness is a picture of the routes
+and model inventory that harness is configured with. That is the maintainer's deployment, and
+it is also the one kind of content a text scan cannot inspect: a route name rendered into a
+PNG reads as PNG bytes, matches no rule, and passes. Four such screenshots were published
+before anyone noticed. `build-public.mjs` now refuses to stage any binary asset, and
+`scan-company-info.mjs` reports files it cannot read as unscannable rather than counting them
+as clean — the whitelist that decided which extensions to open was the whole defect.
 
 This replaced a `preview.mjs` that rendered the plugin into a hand-written page with a
 hand-written theme. That page defined `--dsw-alias-bg-overlay:#fff` — a value the token never
@@ -278,13 +287,10 @@ labels are localised. A development aid, not a test.
 
 ### The composer model picker
 
-![The model picker in the light theme](docs/picker.png)
-
-![The same picker in the dark theme](docs/picker-dark.png)
-
-Light and dark, both captured from a running harness. `screenshot.mjs` drives the real
-settings UI — it sends the `settings.open` chord, finds the Models section, and photographs
-the panel in place — so the same applies: the theme in the image is the theme the app has.
+It opens on **Pinned**, then **Favorites**, then one section per route, in light and dark
+alike. To see it, run `screenshot.mjs` against your own harness: it drives the real settings
+UI — sending the `settings.open` chord and finding the Models section — so what you get is
+your own catalogue in your own theme.
 
 The picker opens on **Pinned**, then **Favorites**, then one section per route. Pins and
 favorites are lifted *out* of their route and shown once, at the top, so a favorite is one

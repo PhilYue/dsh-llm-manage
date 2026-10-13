@@ -17,7 +17,6 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "docs/*.png",
     "verify-env.mjs",
     "verify.mjs",
     "verify-client.mjs",
