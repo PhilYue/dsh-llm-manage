@@ -23,6 +23,17 @@ window.__ModuleLoader__.load({
   id: 'dsh-llm-manage',
   factory(require) {
     const React = require('react')
+    // The picker card must leave this React subtree's DOM ancestry to be placed
+    // freely: the composer row it lives in declares `container-type: inline-size`,
+    // which implies `contain: layout` and therefore makes that row the containing
+    // block for `position: fixed` descendants. In-tree, the card is confined to
+    // the composer's stacking context, so the right sidebar column paints over it
+    // and no z-index can win — a huge z-index was measured losing. Portalling to
+    // <body> restores the viewport as the containing block, which is what the
+    // placement maths below already assumes, and lifts the card above the
+    // sidebar's own layers. React keeps these events bubbling through the React
+    // tree, so the document-level dismiss and key handlers stay live.
+    const { createPortal } = require('react-dom')
     const h = React.createElement
     const { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } = React
 
@@ -909,6 +920,40 @@ window.__ModuleLoader__.load({
         ? t('pickerTitle')
         : `${current.model}${current.provider === '' ? '' : ` · ${current.provider}`}`
 
+      // The card is built as its own value so it can be portalled to <body>
+      // instead of being nested in the composer row. See the createPortal note
+      // above the React require for why the ancestry, not the z-index, is the
+      // thing that decides whether the sidebar can paint over this card.
+      const card = h('div', {
+        className: 'llmm-menu', style: position, ref: menuRef, role: 'dialog', 'aria-label': t('pickerTitle'),
+      },
+        h('div', { className: 'llmm-menu-head' },
+          h('input', {
+            className: 'llmm-input',
+            placeholder: t('search'),
+            value: query,
+            autoFocus: true,
+            onChange: event => setQuery(event.target.value),
+          }),
+        ),
+        h('div', { className: 'llmm-menu-body' },
+          shown === 0 ? h('div', { className: 'llmm-empty' }, t('noModels')) : null,
+          // Pins and favorites first, across every route. Below, each route
+          // keeps its own section with those rows removed, so a model is never
+          // listed twice and the menu still offers the whole catalogue.
+          sections.pinned.length > 0
+            ? renderSection('llmm-pinned', t('sectionPinned'), sections.pinned)
+            : null,
+          sections.favorites.length > 0
+            ? renderSection('llmm-favorites', t('sectionFavorites'), sections.favorites)
+            : null,
+          sections.groups.map(group => renderSection(
+            group.route, group.name || group.route, group.rows,
+          )),
+        ),
+        failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,
+      )
+
       return h(React.Fragment, null,
         h(Style),
         h('div', { className: 'llmm-root', style: { display: 'inline-flex' } },
@@ -924,35 +969,7 @@ window.__ModuleLoader__.load({
             h('span', { 'aria-hidden': true }, '▾'),
           ),
         ),
-        open && position !== null
-          ? h('div', { className: 'llmm-menu', style: position, ref: menuRef, role: 'dialog', 'aria-label': t('pickerTitle') },
-            h('div', { className: 'llmm-menu-head' },
-              h('input', {
-                className: 'llmm-input',
-                placeholder: t('search'),
-                value: query,
-                autoFocus: true,
-                onChange: event => setQuery(event.target.value),
-              }),
-            ),
-            h('div', { className: 'llmm-menu-body' },
-              shown === 0 ? h('div', { className: 'llmm-empty' }, t('noModels')) : null,
-              // Pins and favorites first, across every route. Below, each route
-              // keeps its own section with those rows removed, so a model is never
-              // listed twice and the menu still offers the whole catalogue.
-              sections.pinned.length > 0
-                ? renderSection('llmm-pinned', t('sectionPinned'), sections.pinned)
-                : null,
-              sections.favorites.length > 0
-                ? renderSection('llmm-favorites', t('sectionFavorites'), sections.favorites)
-                : null,
-              sections.groups.map(group => renderSection(
-                group.route, group.name || group.route, group.rows,
-              )),
-            ),
-            failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,
-          )
-          : null,
+        open && position !== null ? createPortal(card, document.body) : null,
       )
     }
 

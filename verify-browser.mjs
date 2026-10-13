@@ -115,10 +115,16 @@ const PAGE = `<!doctype html>
         { status: 200, headers: { 'content-type': 'application/json' } }))
     }
     var captured
+    // The platform seeds react-dom as well as react (packages/client/web/src/seed.ts),
+    // and the card portals through it, so the page must serve the same modules the real
+    // loader does - both UMD builds are already on this page. Offering only "react" here
+    // failed the client half outright, which took every check in this suite down with it.
+    var PLATFORM = { 'react': window.React, 'react/jsx-runtime': window.React,
+      'react-dom': window.ReactDOM, 'react-dom/client': window.ReactDOM }
     window.__ModuleLoader__ = { load: function (spec) {
       if (spec.id !== 'dsh-llm-manage') { log('FAIL unexpected module id ' + spec.id); return }
       captured = spec.factory(function (name) {
-        if (name === 'react') return window.React
+        if (Object.prototype.hasOwnProperty.call(PLATFORM, name) && PLATFORM[name]) return PLATFORM[name]
         throw new Error('unavailable module ' + name)
       })
     } }
@@ -248,7 +254,13 @@ const PAGE = `<!doctype html>
               }
             }
             var measurePicker = function (pickerHost) {
-              var menu = pickerHost.querySelector('.llmm-menu')
+              // The card is portalled to <body>, so it is deliberately NOT inside
+              // pickerHost. Measure it where it renders: scoping to pickerHost is what
+              // made every menu assertion here fail after the portal, and a suite that
+              // only ever looked inside pickerHost could not have seen the sidebar
+              // covering the card in the first place.
+              var menu = document.querySelector('.llmm-menu')
+              log('PICKER_CARD_PARENT=' + (menu && menu.parentElement ? menu.parentElement.tagName : 'none'))
               if (!menu) { log('FAIL picker menu did not open'); done(); return }
               var heads = Array.prototype.slice.call(menu.querySelectorAll('.llmm-group'))
               log('pickerSections=' + heads.map(function (nd) { return nd.textContent }).join(' | '))
@@ -493,6 +505,14 @@ check('a button at the row edge still keeps its label on-screen',
 // ── the composer picker, measured ───────────────────────────────────────────
 check('the picker opens with its sections in a real engine',
   (line('pickerSections') ?? '') !== '', line('pickerSections'))
+// Structural, in the engine that has real layout: the card must be a child of
+// <body> and not of the host the trigger lives in. In the composer this is the
+// difference between a card that can be placed freely and one confined by the
+// composer row's `container-type: inline-size`, which is what let the right
+// sidebar paint over it.
+check('the picker card is a child of <body>, not of the composer host',
+  line('PICKER_CARD_PARENT') === 'BODY',
+  `parent=${line('PICKER_CARD_PARENT')}`)
 check('the picker leads with Pinned, then Favorites',
   line('PICKER_FIRST_IS_PINNED') === 'true' && line('PICKER_SECOND_IS_FAVORITES') === 'true',
   `${line('pickerFirstSection')} / ${line('pickerSecondSection')}`)

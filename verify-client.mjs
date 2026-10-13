@@ -146,13 +146,34 @@ globalThis.fetch = async (url, init) => {
 }
 
 // ── the real Client half ────────────────────────────────────────────────────
+// The loader's require can only hand back modules the platform SEEDS (see
+// web/src/seed.ts). This suite used to mock a hand-written allowlist, which
+// enforced nothing about reality: it passed while the client required a module
+// no seed supplies, and it would have failed for a seeded module the mock never
+// learned about. So the seed list is READ FROM THE CHECKOUT here, and the same
+// list both drives the mock and guards the client's requires below.
+const seedSource = readFileSync(join(DH, 'packages/client/web/src/seed.ts'), 'utf8')
+const seedBody = seedSource.slice(seedSource.indexOf('return {'))
+const seedWords = new Set([...seedBody.matchAll(/^\s*'([^']+)':/gm)].map(m => m[1]))
+if (seedWords.size === 0) throw new Error('parsed no seed words from packages/client/web/src/seed.ts')
+const PLATFORM = {
+  'react': React,
+  'react-dom': fromWeb('react-dom'),
+  'react-dom/client': fromWeb('react-dom/client'),
+  'react/jsx-runtime': React,
+}
 const slots = []
 window.__ModuleLoader__ = {
   load: ({ id, factory }) => {
     if (id !== 'dsh-llm-manage') throw new Error(`unexpected module id "${id}"`)
     captured = factory((name) => {
-      if (name === 'react') return React
-      throw new Error(`client.js required unavailable module "${name}"`)
+      if (!seedWords.has(name)) {
+        throw new Error(`client.js required "${name}", which the platform seed does not provide`)
+      }
+      if (PLATFORM[name] === undefined) {
+        throw new Error(`client.js required the seeded module "${name}", which this suite does not stand up`)
+      }
+      return PLATFORM[name]
     })
   },
 }
@@ -416,6 +437,16 @@ for (const [model, route, list] of [
 const pickerContainer = window.document.createElement('div')
 window.document.body.appendChild(pickerContainer)
 const pickerRoot = createRoot(pickerContainer)
+
+// The card is PORTALLED to <body>, so it is deliberately NOT inside
+// pickerContainer. Queries must follow the card to where it really renders:
+// scoping them to pickerContainer is what made the first run after the portal
+// fail with "0 route labels", and a suite that looked only at pickerContainer
+// could never have caught the sidebar painting over the card either. The trigger
+// stays in pickerContainer, because only the card leaves the composer subtree.
+const pickerMenu = () => window.document.body.querySelector('.llmm-menu')
+const pickerMenuQuery = (selector) => pickerMenu()?.querySelector(selector) ?? null
+const pickerMenuQueryAll = (selector) => Array.from(pickerMenu()?.querySelectorAll(selector) ?? [])
 // Guarded on purpose: an undeclared service makes the inject face throw, and an
 // unguarded throw here would abort the run instead of failing one check — hiding
 // every assertion after it. That is exactly how the live regression escaped notice.
@@ -442,12 +473,38 @@ await act(async () => {
   const trigger = pickerContainer.querySelector('.llmm-trigger')
   if (trigger === null) throw new Error('the picker rendered no trigger')
   trigger.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-  await waitFor(() => pickerContainer.querySelector('.llmm-menu-body') !== null)
+  await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
 })
+
+// The card must live on <body>, not nested in the composer row that hosts the
+// trigger. The composer row declares `container-type: inline-size` (metrics
+// containment), which makes it the containing block for `position: fixed`
+// descendants; in-tree, the card is therefore confined to the composer's
+// stacking context and the right sidebar column paints over it, and a measured
+// z-index of 2147483647 still lost. Nothing about the card's own CSS can fix
+// that, so the ancestry IS the fix and this is the check that holds it.
+check('the picker card is portalled out of the composer, to <body>',
+  pickerMenu() !== null
+  && pickerMenu().parentElement === window.document.body
+  && pickerContainer.querySelector('.llmm-menu') === null,
+  pickerMenu() === null
+    ? 'no card rendered'
+    : `parent=<${pickerMenu().parentElement?.tagName.toLowerCase()}> inComposer=${pickerContainer.querySelector('.llmm-menu') !== null}`)
+
+// A fixed, portalled card is positioned from the viewport, so the placement maths
+// must clamp against the VIEWPORT and not against any column: a clamp that used
+// the trigger's offsetParent would strand the card off-screen once it is portalled.
+const cardStyle = pickerMenu() === null ? null : pickerMenu().style
+check('the portalled card is placed in viewport coordinates',
+  cardStyle !== null
+  && cardStyle.position !== 'absolute'
+  && (cardStyle.left !== '' || cardStyle.right !== '')
+  && (cardStyle.top !== '' || cardStyle.bottom !== ''),
+  cardStyle === null ? 'no card rendered' : `position=${cardStyle.position} left=${cardStyle.left} top=${cardStyle.top} bottom=${cardStyle.bottom}`)
 
 /** The menu's sections, in render order, with each section's row labels. */
 const pickerSections = () => {
-  const body = pickerContainer.querySelector('.llmm-menu-body')
+  const body = pickerMenuQuery('.llmm-menu-body')
   if (body === null) return []
   return Array.from(body.children).map(section => ({
     title: (section.querySelector('.llmm-group')?.textContent ?? '').trim(),
@@ -527,6 +584,53 @@ check('a lifted section on one route names none',
       && opens === closes && literal.trimEnd().endsWith('}'),
     `${literal.length} chars, braces ${opens}/${closes}, `
       + `backticks=${hasBacktick ? 'yes' : 'no'}, interpolation=${hasInterpolation ? 'yes' : 'no'}`)
+
+  // The same hazard, one file over: a suite payload is a template literal too, so a
+  // backtick in a comment INSIDE it truncates the payload and the remaining text
+  // re-parses as JavaScript — `node --check` passes and the damage only appears when
+  // the browser evaluates the mangled string. That happened twice in verify-live.mjs
+  // (a comment mentioning the synthetic click method), each time reporting a failure
+  // about the code under test rather than about the comment. The precise tell: after
+  // the payload's closing backtick the call must end, so anything but `)` means the
+  // literal closed early. Only helpers that take the script as their sole argument
+  // are scanned — a general `name(\`` sweep flags legitimate interpolated first
+  // arguments such as the Host call helper in client.js, which really is followed by
+  // a comma.
+  const PAYLOAD_CALLS = ['evaluate', 'evaluateAsync', 'ev']
+  const BT = String.fromCharCode(96)
+  const truncated = []
+  let payloads = 0
+  for (const file of ['client.js', 'verify.mjs', 'verify-client.mjs', 'verify-browser.mjs', 'verify-live.mjs', 'screenshot.mjs', 'build-public.mjs', 'scan-company-info.mjs']) {
+    let src
+    try {
+      src = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8')
+    } catch {
+      continue
+    }
+    for (const name of PAYLOAD_CALLS) {
+      let from = 0
+      for (;;) {
+        const call = src.indexOf(`${name}(${BT}`, from)
+        if (call === -1) break
+        const openAt = call + name.length + 1
+        const closeAt = src.indexOf(BT, openAt + 1)
+        if (closeAt === -1) {
+          truncated.push(`${file}: ${name} payload is unterminated`)
+          break
+        }
+        const after = src.slice(closeAt + 1).match(/^\s*(.)/)
+        payloads += 1
+        if (after !== null && after[1] !== ')') {
+          const line = src.slice(0, openAt).split('\n').length
+          truncated.push(`${file}:${line}: ${name} payload closed early, followed by "${after[1]}"`)
+        }
+        from = closeAt + 1
+      }
+    }
+  }
+  check('every suite payload template literal closes at its own call',
+    payloads > 0 && truncated.length === 0,
+    truncated.length === 0 ? `${payloads} payloads across the suites` : truncated.join(' | '))
 }
 // Declaring a service by name is not enough when a service you call reaches for
 // another one internally: Cordis checks the CONSUMER's list, so the caller has to
@@ -692,7 +796,7 @@ check('section headings use the design system\'s heading treatment, not the bran
 // it must be that chip rather than look like one. Asserted on the DOM, because a
 // check comparing .llmm-route's declarations against .llmm-chip's would pass even
 // if the two were unrelated — .llmm-route declares almost nothing of its own.
-const routeNodes = Array.from(pickerContainer.querySelectorAll('.llmm-route'))
+const routeNodes = pickerMenuQueryAll('.llmm-route')
 check('the route label is rendered as the panel\'s own chip',
   routeNodes.length > 0 && routeNodes.every(node => node.classList.contains('llmm-chip')),
   `${routeNodes.length} route labels, ${routeNodes.filter(n => n.classList.contains('llmm-chip')).length} of them chips`)
@@ -704,7 +808,7 @@ check('the route label is rendered as the panel\'s own chip',
 // Every lookup here is guarded on purpose: when the sections are broken there is
 // no such row, and dereferencing it would abort the suite mid-run instead of
 // reporting a failure — which would hide every check after this one.
-const menuBody = pickerContainer.querySelector('.llmm-menu-body')
+const menuBody = pickerMenuQuery('.llmm-menu-body')
 const pinnedBody = pinnedAt >= 0 && menuBody !== null ? menuBody.children[pinnedAt] : null
 const mirrorButton = pinnedBody === null
   ? null
@@ -734,10 +838,10 @@ check('clicking a section row selects that row\'s own route and model',
  * @returns {Promise<void>} resolves once the search box is present.
  */
 const ensureOpen = async () => {
-  if (pickerContainer.querySelector('.llmm-input') === null) {
+  if (pickerMenuQuery('.llmm-input') === null) {
     await act(async () => {
       pickerContainer.querySelector('.llmm-trigger').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-      await waitFor(() => pickerContainer.querySelector('.llmm-input') !== null)
+      await waitFor(() => pickerMenuQuery('.llmm-input') !== null)
     })
   }
 }
@@ -746,7 +850,7 @@ const ensureOpen = async () => {
 // the route groups below them.
 await ensureOpen()
 await act(async () => {
-  const input = pickerContainer.querySelector('.llmm-input')
+  const input = pickerMenuQuery('.llmm-input')
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
   setter.call(input, favoredModel)
   input.dispatchEvent(new window.Event('input', { bubbles: true }))

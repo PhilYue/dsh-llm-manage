@@ -293,6 +293,65 @@ async function main() {
 
   check('the picker menu opens in the real composer', menu.opened === true, JSON.stringify(menu).slice(0, 120))
 
+  // The reported regression: with the right sidebar open, the card was cut off and
+  // the sidebar painted over its right side. The card lives in the composer row,
+  // which declares `container-type: inline-size` — metrics containment, which makes
+  // that row the containing block for `position: fixed` descendants — so in-tree the
+  // card is confined to the composer's stacking context. Measured then: a huge
+  // z-index still lost, while the same node moved to <body> at the same coordinates
+  // won. This check opens the real sidebar and hit-tests the card across its FULL
+  // width, because a check sampling only its left edge would pass on the broken
+  // build — the left edge was never the part that got covered.
+  const overlap = await evaluate(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+    const opener = Array.from(document.querySelectorAll('button'))
+      .find((el) => /打开右侧边栏/.test(el.getAttribute('aria-label') || ''))
+    if (!opener) return { ok: false, why: 'this build offered no right-sidebar control' }
+    opener.click()
+    await wait(1600)
+    const sidebarOpen = document.querySelector('[data-sidebar-right-open]') !== null
+    // A real click on the opener fires mousedown, which dismisses the card as an
+    // outside click; a synthetic click() does not, so the card may still be open
+    // here. Only open it when it is closed — toggling an open card would close it,
+    // and then this check would report "the card did not reopen" about its own bug.
+    if (document.querySelector('.llmm-menu') === null) {
+      const trigger = document.querySelector('.llmm-trigger')
+      if (!trigger) return { ok: false, why: 'the composer rendered no trigger' }
+      trigger.click()
+      await wait(1000)
+    }
+    const card = document.querySelector('.llmm-menu')
+    if (!card) return { ok: false, why: 'the card was not open with the sidebar out', sidebarOpen }
+    const r = card.getBoundingClientRect()
+    const misses = []
+    let samples = 0
+    for (const fx of [0.15, 0.4, 0.6, 0.75, 0.9, 0.98]) {
+      for (const fy of [0.12, 0.5, 0.88]) {
+        const x = Math.round(r.left + r.width * fx)
+        const y = Math.round(r.top + r.height * fy)
+        samples += 1
+        const hit = document.elementFromPoint(x, y)
+        if (hit === null || !card.contains(hit)) {
+          misses.push(x + ',' + y + ' -> ' + (hit === null ? 'nothing'
+            : (typeof hit.className === 'string' && hit.className ? hit.className.split(/\\s+/)[0] : hit.tagName)))
+        }
+      }
+    }
+    return {
+      ok: true, sidebarOpen, samples, misses,
+      parent: card.parentElement ? card.parentElement.tagName.toLowerCase() : 'none',
+      rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+    }
+  })()`)
+
+  check('the picker card wins the hit test across its whole width with the sidebar open',
+    overlap.ok === true && overlap.sidebarOpen === true && overlap.misses.length === 0,
+    overlap.ok === false
+      ? `could not run: ${overlap.why}`
+      : `parent=<${overlap.parent}> sidebarOpen=${overlap.sidebarOpen} `
+        + `${overlap.samples - overlap.misses.length}/${overlap.samples} samples inside the card`
+        + (overlap.misses.length > 0 ? ` — covered at ${overlap.misses.join(' | ')}` : ''))
+
   // The card's surface, measured against the theme the page is actually running.
   // This is the check the grey card would have failed: the plugin painted
   // --dsw-alias-bg-overlay, which the token contract documents as the popover
@@ -389,6 +448,48 @@ async function main() {
   check('the menu offers every model the catalogue lists, and invents none',
     allRows.length === catalogue.total,
     `menu ${allRows.length} rows vs catalogue ${catalogue.total}`)
+
+  // Portalling moved the card out of the subtree that hosts the trigger, so the two
+  // dismiss paths — an outside mousedown and Escape — must be re-proved on the
+  // portalled node. They are document-level listeners comparing against menuRef and
+  // triggerRef, which keep working across a portal, but "keep working" is exactly the
+  // kind of claim that a DOM-ancestry change invalidates silently. The inside-click
+  // half is here too: a listener that dismissed on ANY mousedown would still pass a
+  // close-only check while making the card impossible to use.
+  const dismiss = await evaluate(`(async () => {
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+    const card = () => document.querySelector('.llmm-menu')
+    const trigger = () => document.querySelector('.llmm-trigger')
+    const out = {}
+    if (card() === null) { trigger().click(); await wait(700) }
+    out.opened = card() !== null
+    if (!out.opened) return out
+
+    // A mousedown inside the card must NOT dismiss it.
+    card().querySelector('.llmm-menu-head').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await wait(400)
+    out.survivesInsideDown = card() !== null
+
+    // A mousedown outside the card must dismiss it.
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await wait(500)
+    out.outsideDownCloses = card() === null
+
+    // Escape must dismiss it.
+    trigger().click(); await wait(700)
+    out.reopened = card() !== null
+    if (out.reopened) {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await wait(500)
+      out.escapeCloses = card() === null
+    }
+    return out
+  })()`)
+  check('the portalled card still dismisses on an outside click and on Escape, and not on an inside click',
+    dismiss.opened === true && dismiss.survivesInsideDown === true
+    && dismiss.outsideDownCloses === true && dismiss.reopened === true && dismiss.escapeCloses === true,
+    `opened=${dismiss.opened} insideKeepsOpen=${dismiss.survivesInsideDown} `
+      + `outsideDownCloses=${dismiss.outsideDownCloses} escapeCloses=${dismiss.escapeCloses}`)
 }
 
 try {
