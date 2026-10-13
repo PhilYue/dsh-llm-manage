@@ -287,10 +287,18 @@ labels are localised. A development aid, not a test.
 
 ### The composer model picker
 
-It opens on **Pinned**, then **Favorites**, then one section per route, in light and dark
-alike. To see it, run `screenshot.mjs` against your own harness: it drives the real settings
-UI — sending the `settings.open` chord and finding the Models section — so what you get is
-your own catalogue in your own theme.
+![The model picker, rendered from a synthetic catalogue](docs/picker.png)
+
+The picture is a synthetic render, not a photograph of anyone's harness: `preview.mjs`
+renders the real plugin code against an invented catalogue — fake models on fake routes —
+so the screenshot cannot contain a route you do not already have in front of you in the
+source. To see it against *your* catalogue instead, run `screenshot.mjs` against your own
+harness: it drives the real settings UI — sending the `settings.open` chord and finding the
+Models section — so what you get is your own catalogue in your own theme.
+
+The panel, from the same renderer:
+
+![The models panel, rendered from the same synthetic catalogue](docs/panel.png)
 
 The picker opens on **Pinned**, then **Favorites**, then one section per route. Pins and
 favorites are lifted *out* of their route and shown once, at the top, so a favorite is one
