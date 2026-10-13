@@ -192,11 +192,13 @@ async function main() {
     `${style.count} style element(s), ${style.chars} chars`)
 
   // A user agent's default button has a 0-radius border box; the plugin's trigger is
-  // 8px/4px 8px. Comparing against a freshly created element rather than a hard-coded
-  // constant means this fails if the stylesheet is absent even on a UA that rounds
-  // its own defaults.
+  // 8px with the shipped picker's padding. Comparing against a freshly created element
+  // rather than a hard-coded constant means this fails if the stylesheet is absent even
+  // on a UA that rounds its own defaults.
   check('the stylesheet is actually applied, not merely present',
-    page.triggerRadius !== page.unstyledButton && page.triggerPadding === '4px 8px',
+    page.triggerRadius !== page.unstyledButton
+    && page.triggerRadius === '8px'
+    && page.triggerPadding === '0px 4px 0px 8px',
     `trigger radius=${page.triggerRadius} padding=${page.triggerPadding}, bare button radius=${page.unstyledButton}`)
 
   // The specific failure that took the styles down. Matched on the message rather

@@ -155,18 +155,15 @@ for (const scheme of ['light', 'dark']) {
 
   // The plugin renders in two places: the settings panel (a wide surface) and the
   // composer (where .llmm-root wraps only the 220px trigger). Only the former is worth
-  // photographing as "the panel", so require a surface-sized element rather than
-  // writing a broken crop of the trigger under the panel's name.
-  const panel = await evaluate(`(() => {
-    const rect = document.querySelector('.llmm-root')?.getBoundingClientRect()
-    return rect === undefined ? null : { width: Math.round(rect.width), height: Math.round(rect.height) }
-  })()`)
-  if (panel === null) console.log(`  panel   ${scheme}: not on screen`)
-  else if (panel.width < 300) console.log(`  panel   ${scheme}: skipped — the composer is showing (${panel.width}x${panel.height}), open the settings panel`)
-  else {
-    const shot = await capture('.llmm-root', 10, `panel${suffix}.png`)
-    console.log(shot === null ? `  panel   ${scheme}: not measurable` : `  panel   ${scheme}: ${shot.width}x${shot.height} → docs/${shot.file}`)
-  }
+  // The settings panel is NOT captured here. It registers into
+  // `settings.models.provider-card`, reachable only through the settings UI (its
+  // `settings.open` shortcut command ships with `binding: null`, so there is no key to
+  // send), and every other way to photograph it means constructing the page it renders
+  // in — which is the mistake that produced the grey card in the first place. Reported
+  // rather than silently skipped, so the absence is visible.
+  const panelWidth = await evaluate(`Math.round(document.querySelector('.llmm-root')?.getBoundingClientRect().width ?? 0)`)
+  console.log(`  panel   ${scheme}: not captured — the settings panel needs the settings UI; `
+    + `verify-browser.mjs asserts its computed design instead (composer root is ${panelWidth}px wide)`)
 
   // Open the picker, then photograph the card itself. The card is portaled, so it is
   // not inside .llmm-root and has to be measured on its own.

@@ -259,28 +259,38 @@ window.__ModuleLoader__.load({
 
     /** Stylesheet text shared by all three contributions, built from theme tokens only. */
     const CSS = `
-.llmm-root{font-size:12px;color:var(--dsw-alias-label-primary)}
-.llmm-panel{margin-top:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:10px;background:var(--dsw-alias-bg-layer-2)}
-.llmm-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.llmm-title{font-weight:600}
-.llmm-hint{color:var(--dsw-alias-label-secondary);margin:6px 0 8px;line-height:1.5}
-.llmm-counts{display:flex;gap:10px;flex-wrap:wrap;color:var(--dsw-alias-label-secondary);margin-bottom:6px}
-.llmm-count b{color:var(--dsw-alias-label-primary)}
-.llmm-actions{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto}
-.llmm-btn{font:inherit;padding:3px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;transition:border-color .12s ease,background .12s ease,color .12s ease,transform .08s ease}
-.llmm-btn:hover{border-color:var(--dsw-alias-border-l2)}
-.llmm-btn[disabled]{opacity:.5;cursor:default}
-.llmm-btn.llmm-on{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}
+.llmm-root{font-size:14px;color:var(--dsw-alias-label-primary)}
+/* The panel is a card on the Models settings page, so it takes that page's card
+   material verbatim (ui-settings-models ModelsSection.module.css .rowCard):
+   0.5px settings stroke, the settings card fill, radius-xl, 12px/14px padding. It
+   used to be bg-layer-2 with a 1px border at 8px, which is not a shape that page
+   uses anywhere -- the border read twice as heavy as its neighbours. */
+.llmm-panel{display:flex;flex-direction:column;gap:12px;margin-top:12px;border:0.5px solid var(--dsw-alias-settings-card-stroke);background:var(--dsw-alias-settings-card-fill);border-radius:var(--dsw-radius-xl);padding:12px 14px}
+.llmm-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.llmm-title{font-size:14px;line-height:22px;font-weight:500;color:var(--dsw-alias-label-primary)}
+.llmm-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.llmm-counts{display:flex;gap:10px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.llmm-count b{font-weight:500;color:var(--dsw-alias-label-secondary)}
+.llmm-actions{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+/* The settings page's compact button: 28px tall, radius-sm, 12/18, and a 0.5px
+   border so an outlined control is not 2px taller than the filled one beside it. */
+.llmm-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:28px;padding:0 10px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;transition:background .12s ease,color .12s ease}
+.llmm-btn:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-btn[disabled]{opacity:.4;cursor:default}
+/* The active toggle is a filled state, not a tinted outline: brand-primary is the
+   near-black label colour in this theme, so text in it on a transparent button
+   would be indistinguishable from the inactive one. */
+.llmm-btn.llmm-on{background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4);color:var(--dsw-alias-label-primary);font-weight:500}
 .llmm-btn.llmm-danger{color:var(--dsw-alias-state-error-primary)}
-/* Icon buttons: a fixed 26px square keeps four row actions narrow enough to sit
-   beside the model name, and stops the row reflowing when a label changes. */
-.llmm-ibtn{display:inline-flex;align-items:center;justify-content:center;width:26px;height:24px;padding:0;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer;transition:background .12s ease,border-color .12s ease,color .12s ease,transform .08s ease}
-.llmm-ibtn:hover{border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
-.llmm-ibtn:active{transform:scale(.92)}
-.llmm-ibtn:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.llmm-ibtn[disabled]{opacity:.5;cursor:default;transform:none}
-.llmm-ibtn.llmm-on{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}
-.llmm-ibtn.llmm-danger:hover{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
+.llmm-btn.llmm-danger:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover-danger)}
+/* Icon buttons: the settings page's 28px square (ModelsSection .iconButton), which
+   keeps four row actions narrow enough to sit beside the model name and stops the
+   row reflowing when a label changes. */
+.llmm-ibtn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;transition:background .12s ease,color .12s ease}
+.llmm-ibtn:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.llmm-ibtn[disabled]{opacity:.4;cursor:default}
+.llmm-ibtn.llmm-on{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.llmm-ibtn.llmm-danger:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover-danger);color:var(--dsw-alias-state-error-primary)}
 .llmm-icon{display:block;flex:none}
 .llmm-spin{animation:llmm-rotate .9s linear infinite}
 @keyframes llmm-rotate{to{transform:rotate(360deg)}}
@@ -288,25 +298,32 @@ window.__ModuleLoader__.load({
    container, so an in-flow tooltip would be clipped at its edges. */
 .llmm-tip{position:fixed;z-index:80;transform:translate(-50%,-100%);pointer-events:none;padding:3px 7px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-tooltip-bg);color:var(--dsw-static-neutral-bluish-00);font-size:13px;line-height:20px;white-space:nowrap;animation:llmm-tip-in .15s ease-out}
 @keyframes llmm-tip-in{from{opacity:0;transform:translate(-50%,-90%)}to{opacity:1;transform:translate(-50%,-100%)}}
-.llmm-rows{display:flex;flex-direction:column;gap:4px;max-height:340px;overflow:auto;margin-top:6px}
-.llmm-row{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;border:1px solid transparent}
-.llmm-row:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l1)}
+.llmm-rows{display:flex;flex-direction:column;gap:2px;max-height:340px;overflow:auto;padding:2px 0;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l1);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l1)}
+/* Rows are the settings page's candidate rows: radius-md, 6px/8px inset, no border
+   until hover, and the hover fill carries the whole state change. The old 1px
+   border on every row drew a box around each one at rest. */
+.llmm-row{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--dsw-radius-md);border:0;background:transparent;cursor:default}
+.llmm-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .llmm-row.llmm-hidden{opacity:.55}
-.llmm-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-idle-primary)}
+.llmm-dot{box-sizing:border-box;display:inline-block;width:8px;height:8px;border-radius:50%;corner-shape:round;flex:none;background:var(--dsw-alias-state-idle-primary)}
 .llmm-dot.ok{background:var(--dsw-alias-state-success-primary)}
 .llmm-dot.warn{background:var(--dsw-alias-state-warn-primary)}
 .llmm-dot.bad{background:var(--dsw-alias-state-error-primary)}
-.llmm-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.llmm-why{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:60px}
+/* Model ids are identifiers, so they take the app's code face -- the same choice the
+   settings page's own candidate list makes (ModelsSection .candidateId). It used to
+   hardcode a Menlo/Consolas stack, which ignored whatever the app configures. */
+.llmm-name{font-family:var(--ds-font-family-code);font-size:13px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-why{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:60px}
 .llmm-rowacts{display:flex;gap:2px;margin-left:auto;opacity:.6;transition:opacity .12s ease}
+/* Quiet at rest, full on hover or keyboard focus. They stay visible rather than
+   appearing on hover: pin/favorite are the point of the panel, and a control you can
+   only find by hovering is a control most people never find. */
 .llmm-row:hover .llmm-rowacts,.llmm-row:focus-within .llmm-rowacts{opacity:1}
-.llmm-chip{font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);flex:none}
-.llmm-err{color:var(--dsw-alias-state-error-primary);margin-top:6px}
-.llmm-trigger{display:flex;align-items:center;gap:6px;max-width:220px;font:inherit;padding:4px 8px;border-radius:var(--dsw-radius-sm);border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}
-.llmm-trigger:hover{border-color:var(--dsw-alias-border-l2)}
-.llmm-trigger:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
-.llmm-trigger.llmm-locked{opacity:.55;cursor:default}
-.llmm-trigger-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The annotation chip is the settings page's row tag, not a pill: 0.5px l3 stroke at
+   radius-xs, 11/16, secondary tone. A capsule at 999px beside 12px text read as a
+   button. */
+.llmm-chip{flex:none;padding:1px 6px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px;white-space:nowrap}
+.llmm-err{color:var(--dsw-alias-state-error-primary);font-size:12px;line-height:18px;margin-top:6px}
 /* The dropdown card. It takes the same material as every other DSH popover
    (ui-primitives Menu.module.css, and the panel modules that copy it): no border,
    elevation-prominent, and the surface painted on a ::before pseudo-element so the
@@ -327,9 +344,25 @@ window.__ModuleLoader__.load({
 .llmm-menu-head{flex:none;display:flex;gap:8px;align-items:center;margin:2px 0 3px}
 /* DSH's own model picker keeps the search borderless and transparent inside the
    card, and marks focus with the row-level hover fill rather than a ring. */
-.llmm-input{font:inherit;font-size:12px;flex:1;min-width:0;padding:5px 7px;border:0 solid transparent;border-radius:var(--dsw-radius-md);background:transparent;color:var(--dsw-alias-label-primary)}
-.llmm-input::placeholder{color:var(--dsw-alias-label-caption)}
-.llmm-input:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}
+/* The settings page's text input: 32px, radius-md, inset 10px, a 0.5px l4 stroke on
+   bg-layer-1. The panel's search field had its own 1px/6px/bg-base shape, which read as
+   a different control from the fields on the same page. */
+.llmm-input{box-sizing:border-box;width:100%;height:32px;padding:0 10px;border:0.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;line-height:22px}
+.llmm-input::placeholder{color:var(--dsw-alias-label-dimmed)}
+.llmm-input:focus{outline:none;border-color:var(--dsw-alias-state-business-primary)}
+/* Inside the menu card the search follows the shipped picker instead: borderless and
+   transparent, with the hover fill as its focus indication. A bordered field floating
+   in a 4px-inset menu reads as a widget parked on the card. */
+.llmm-menu .llmm-input{height:auto;padding:5px 7px;border:0 solid transparent;background:transparent}
+.llmm-menu .llmm-input:focus{border-color:transparent;background:var(--dsw-alias-interactive-bg-hover)}
+/* The composer trigger matches its neighbours in that row -- the shipped picker's
+   trigger and the permission select are borderless 28px chips that show a hover fill.
+   A 1px-stroked, filled button made the model control the only boxed item there. */
+.llmm-trigger{box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;max-width:220px;height:28px;padding:0 4px 0 8px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:13px;line-height:20px;cursor:pointer}
+.llmm-trigger:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-trigger:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}
+.llmm-trigger.llmm-locked{opacity:.55;cursor:default}
+.llmm-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .llmm-menu-body{flex:auto;min-height:0;overflow-y:auto;overflow-x:hidden}
 /* Section headings take the Menu primitive's heading metrics (MenuGroup.module.css):
    11/16 at weight 500 in tertiary. One deliberate difference: DSH toggles a fill on
@@ -355,10 +388,10 @@ window.__ModuleLoader__.load({
 .llmm-item:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}
 .llmm-item.llmm-active{background:var(--dsw-alias-interactive-bg-hover)}
 .llmm-item.llmm-down{opacity:.55}
-.llmm-empty{padding:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
-.llmm-banner{display:flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border-radius:var(--dsw-radius-md);border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-primary)}
-.llmm-banner b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.llmm-banner .llmm-grow{flex:1}
+.llmm-empty{margin:2px 0;padding:12px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:center}
+.llmm-banner{display:flex;align-items:center;gap:8px;padding:6px 10px;border:0.5px solid var(--dsw-alias-state-warn-primary);border-radius:var(--dsw-radius-md);background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}
+.llmm-banner b{font-family:var(--ds-font-family-code);font-weight:500}
+.llmm-banner .llmm-grow{flex:1;min-width:0}
 `
 
     /**

@@ -67,8 +67,13 @@ const PAGE = `<!doctype html>
     --dsw-alias-interactive-bg-hover:rgba(38,49,72,.06);
     --dsw-alias-interactive-bg-hover-danger:rgba(236,19,19,.05);
     --dsw-alias-scrollbar-bg-l2:#e5e5e5;--dsw-alias-scrollbar-hover-l2:#d4d4d4;
+    --dsw-alias-scrollbar-bg-l1:#e5e5e5;--dsw-alias-scrollbar-hover-l1:#d4d4d4;
     --dsw-alias-tooltip-bg:#2c2c2e;--dsw-alias-bg-module-platform:#f5f6f7;
-    --dsw-radius-sm:8px;--dsw-radius-md:12px;--dsw-radius-lg:16px;
+    --dsw-alias-state-warn-label:#dd8629;--dsw-focus-ring-color:transparent;
+    --dsw-alias-settings-card-fill:#fff;--dsw-alias-settings-card-stroke:rgba(0,0,0,.16);
+    --ds-font-family-code:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --dsw-radius-xs:4px;--dsw-radius-sm:8px;--dsw-radius-md:12px;--dsw-radius-lg:16px;
+    --dsw-radius-xl:20px;
     --dsw-specific-menu:rgba(248,249,250,.94);
     --dsw-alias-menu-group-header-fill:rgba(248,249,250,.94);
     --dsw-menu-backdrop-filter:blur(40px) saturate(150%);
@@ -192,6 +197,28 @@ const PAGE = `<!doctype html>
             var actsBox = document.querySelector('.llmm-rowacts').getBoundingClientRect()
             log('rowActionGroupWidth=' + Math.round(actsBox.width))
             log('ROW_NO_OVERFLOW=' + (actsBox.right <= row.getBoundingClientRect().right + 1))
+
+            // The panel card's real material, computed here because the README cannot
+            // show a panel screenshot: it registers into
+            // settings.models.provider-card, reachable only through the settings UI, and
+            // building a page to photograph it would supply the theme being checked.
+            var panelEl = document.querySelector('.llmm-panel')
+            if (panelEl) {
+              var panelStyle = getComputedStyle(panelEl)
+              log('PANEL_BORDER_WIDTH=' + panelStyle.borderTopWidth)
+              log('PANEL_BORDER_COLOR=' + panelStyle.borderTopColor)
+              log('PANEL_RADIUS=' + panelStyle.borderTopLeftRadius)
+              log('PANEL_BACKGROUND=' + panelStyle.backgroundColor)
+              // bg-layer-2 and settings-card-fill are both white in this theme, so the
+              // colour alone cannot distinguish them; the stroke can, because the settings
+              // stroke is l4 (0.16 alpha) while border-l1 is 0.04. Assert the alpha.
+              log('PANEL_STROKE_ALPHA=' + (function () {
+                var m = /rgba?\\([^)]*\\)/.exec(panelStyle.borderTopColor)
+                if (!m) return 'n/a'
+                var parts = m[0].slice(5, -1).split(',').map(Number)
+                return parts.length > 3 ? String(parts[3]) : '1'
+              })())
+            } else { log('FAIL no panel card') }
 
             // The same four actions rendered as the text buttons this replaced,
             // measured in the panel's own stylesheet.
@@ -435,6 +462,18 @@ check('row actions are icon-sized, not text-width', (num('buttonWidth') ?? 999) 
   `buttonWidth=${num('buttonWidth')}px height=${num('buttonHeight')}px`)
 check('row actions render no visible text', line('buttonHasVisibleText') === 'false')
 check('row actions carry an aria-label', line('buttonHasAriaLabel') === 'true')
+// The panel card, computed in a real engine. Chrome rounds a 0.5px border up to 1px in
+// getComputedStyle (verified: a bare `border:0.5px solid red` div reports 1px at DPR 1 and
+// 2), so the width is asserted to be a hairline rather than to the literal string; the
+// declaration itself is pinned by verify-client.mjs. What the engine CAN separate is the
+// stroke colour: the settings stroke is --dsw-alias-border-l4 at 0.16 alpha, while the old
+// card used border-l1 at 0.04. Both fills are white in this theme, so the alpha is the only
+// thing distinguishing the settings card material from the heavier box it replaced.
+check('the panel card renders the settings page\'s hairline stroke and radius',
+  (line('PANEL_BORDER_WIDTH') === '0.5px' || line('PANEL_BORDER_WIDTH') === '1px')
+  && line('PANEL_RADIUS') === '20px'
+  && line('PANEL_STROKE_ALPHA') === '0.16',
+  `border=${line('PANEL_BORDER_WIDTH')} ${line('PANEL_BORDER_COLOR')} (alpha ${line('PANEL_STROKE_ALPHA')}, want 0.16 = border-l4) radius=${line('PANEL_RADIUS')} background=${line('PANEL_BACKGROUND')}`)
 
 const iconWidth = num('rowActionGroupWidth')
 const textWidth = num('textButtonGroupWidth')

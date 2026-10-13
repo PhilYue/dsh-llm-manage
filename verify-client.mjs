@@ -603,6 +603,41 @@ check('a picker card uses the shipped model picker\'s own card metrics',
   menuDecls !== null && menuMismatch.length === 0,
   menuMismatch.join('; ') || Object.keys(menuContract).map(k => `${k}=${menuDecls[k]}`).join(' '))
 
+// The panel is a card on the Models settings page, so it takes that page's card
+// material (ui-settings-models ModelsSection.module.css). It previously used
+// bg-layer-2 with a 1px border at 8px and 6px radii elsewhere -- shapes that page uses
+// nowhere, and a border twice the weight of every neighbour on it.
+const panelContract = {
+  border: '0.5px solid var(--dsw-alias-settings-card-stroke)',
+  background: 'var(--dsw-alias-settings-card-fill)',
+  'border-radius': 'var(--dsw-radius-xl)',
+  padding: '12px 14px',
+}
+const panelDecls = declarationsOf('.llmm-panel')
+const panelMismatch = Object.entries(panelContract)
+  .filter(([key, want]) => panelDecls?.[key] !== want)
+  .map(([key, want]) => `${key}: want "${want}" got "${panelDecls?.[key]}"`)
+check('the panel card uses the settings page\'s own card material',
+  panelDecls !== null && panelMismatch.length === 0,
+  panelMismatch.join('; ') || Object.keys(panelContract).map(k => `${k}=${panelDecls[k]}`).join(' '))
+
+// Hairlines are 0.5px throughout the design system, and every 1px border the plugin
+// drew read heavier than the surfaces it sat between. Assert no rule re-introduces one.
+// Only solid hairlines: the design system draws its dashed "nothing here yet"
+// borders at 1px (ModelsSection .modelEmpty), so flagging every 1px border would be
+// wrong as well as noisy.
+const onePixel = (cssText.match(/border[^;{}]*:\s*1px\s+solid[^;{}]*/g) ?? [])
+check('no rule draws a solid 1px hairline where the design system uses 0.5px',
+  onePixel.length === 0,
+  onePixel.length === 0 ? 'none' : onePixel.join(' | '))
+
+// The model id is an identifier, so it must use the app's configured code face rather
+// than a hardcoded platform stack, which ignored whatever the app sets.
+check('model ids use the app\'s code font, not a hardcoded stack',
+  (declarationsOf('.llmm-name')?.['font-family'] ?? '') === 'var(--ds-font-family-code)'
+  && (declarationsOf('.llmm-banner b')?.['font-family'] ?? '') === 'var(--ds-font-family-code)',
+  `name=${declarationsOf('.llmm-name')?.['font-family']} banner=${declarationsOf('.llmm-banner b')?.['font-family']}`)
+
 // The card must not be painted with the overlay/scrim token. That was the grey card:
 // --dsw-alias-bg-overlay is documented as "Overlay and popover background" but
 // resolves to a mid grey, so an opaque card built from it reads as a hole rather than

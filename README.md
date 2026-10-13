@@ -5,11 +5,11 @@ manages the model inventory of a configured LLM route: pins and favorites, a per
 reason why each model is unusable, gateway directory reconciliation, and automatic
 fallback when one model's quota runs out.
 
-![The model management panel](docs/panel.png)
+![The composer model picker, with Pinned and Favorites lifted above the route sections](docs/picker.png)
 
-*Captured from the installed plugin in a running harness, with the statuses the panel can
-show: usable, wrong protocol, failed, quota exhausted, retired, and in use. The colours are
-whatever your active theme resolves, because the capture supplies no theme of its own.*
+*Captured from the installed plugin in a running harness — the real theme, the real
+catalogue. The capture supplies no theme of its own, which is deliberate; see
+[Looking at the panel without restarting](#looking-at-the-panel-without-restarting).*
 
 ## Why
 
@@ -275,7 +275,20 @@ instead of guessed. A development aid, not a test.
 
 ### The composer model picker
 
-![The model picker, showing Pinned and Favorites above the route sections](docs/picker.png)
+![The model picker in the light theme](docs/picker.png)
+
+![The same picker in the dark theme](docs/picker-dark.png)
+
+Light and dark, both captured from a running harness.
+
+There is no screenshot of the settings panel, for the same reason there is no `preview.mjs`.
+The panel registers into `settings.models.provider-card`, reachable only by clicking through
+the settings UI — its `settings.open` shortcut command ships with `binding: null`, so there
+is no key to send. Every other way to photograph it means building the page it renders in,
+and a capture that builds its own theme cannot be trusted to show the theme: that is exactly
+how a white mock became a grey card. So its design is asserted instead of photographed —
+`verify-browser.mjs` computes the card's stroke and radius in a real engine, and
+`verify-client.mjs` checks it against the settings page's own card contract.
 
 The picker opens on **Pinned**, then **Favorites**, then one section per route. Pins and
 favorites are lifted *out* of their route and shown once, at the top, so a favorite is one
