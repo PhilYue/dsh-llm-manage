@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     const DICT = {
       en: {
         panelTitle: 'Models',
-        panelHint: 'Pins and favorites sort to the top of the model picker; hidden models leave it.',
+        panelHint: 'Pinned and favorite models get their own sections at the top of the model picker; hidden models leave it.',
         loading: 'Reading models…',
         retry: 'Retry',
         refresh: 'Re-check gateway',
@@ -53,6 +53,8 @@ window.__ModuleLoader__.load({
         usable: 'usable',
         problems: 'flagged',
         pinned: 'pinned',
+        sectionPinned: 'Pinned',
+        sectionFavorites: 'Favorites',
         pickerTitle: 'Model',
         search: 'Search models',
         noModels: 'No models matched.',
@@ -70,7 +72,7 @@ window.__ModuleLoader__.load({
       },
       zh: {
         panelTitle: '模型管理',
-        panelHint: '置顶与收藏会排在选择器最前；已隐藏的模型不会出现在选择器里。',
+        panelHint: '置顶与收藏的模型会在选择器顶部单独成组；已隐藏的模型不会出现在选择器里。',
         loading: '读取模型中…',
         retry: '重试',
         refresh: '重新检查网关',
@@ -90,6 +92,8 @@ window.__ModuleLoader__.load({
         usable: '可用',
         problems: '异常',
         pinned: '已置顶',
+        sectionPinned: '置顶',
+        sectionFavorites: '收藏',
         pickerTitle: '模型',
         search: '搜索模型',
         noModels: '没有匹配的模型。',
@@ -307,6 +311,9 @@ window.__ModuleLoader__.load({
 .llmm-input{font:inherit;flex:1;padding:5px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}
 .llmm-menu-body{overflow:auto;padding:4px}
 .llmm-group{position:sticky;top:0;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-secondary);padding:6px 8px 2px;font-weight:600}
+.llmm-group.llmm-accent{color:var(--dsw-alias-brand-primary)}
+.llmm-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-route{margin-left:auto;flex:none;font-size:11px;color:var(--dsw-alias-label-secondary)}
 .llmm-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;font:inherit;padding:5px 8px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer}
 .llmm-item:hover{background:var(--dsw-alias-bg-layer-1)}
 .llmm-item.llmm-active{border-color:var(--dsw-alias-brand-primary)}
@@ -677,28 +684,85 @@ window.__ModuleLoader__.load({
       // health. When the route is unavailable, fall back to the shipped
       // catalog's own groups so this shadowed seat still offers every model:
       // shadowing must never be the reason a model cannot be selected.
-      const groups = useMemo(() => {
-        const needle = query.trim().toLowerCase()
-        const source = snap !== null
-          ? snap.groups.map(group => ({
+      //
+      // Rows keep their overlay flags here instead of being reduced to
+      // route+model, because the sections below lift pins and favorites OUT of
+      // their route group. The Host ranks only WITHIN a group and orders groups
+      // by route name, so with several routes a favorite can sit below every
+      // model of every alphabetically-earlier route — which is the scrolling the
+      // sections exist to remove.
+      const catalogue = useMemo(() => {
+        if (snap !== null) {
+          return snap.groups.map(group => ({
             route: group.route,
             name: group.name,
             rows: group.rows
               .filter(row => !row.hidden)
-              .map(row => ({ route: row.route, model: row.model })),
+              .map(row => ({
+                route: row.route,
+                model: row.model,
+                pinned: row.pinned === true,
+                favorite: row.favorite === true,
+              })),
           }))
-          : (state && Array.isArray(state.groups) ? state.groups : []).map(group => ({
-            route: group.id,
-            name: group.name,
-            rows: group.models.map(model => ({ route: group.id, model: model.id })),
-          }))
-        return source
+        }
+        const source = state && Array.isArray(state.groups) ? state.groups : []
+        // The shipped directory carries no overlay, so nothing can be lifted:
+        // without the Host there is no way to know what is pinned or favorited.
+        return source.map(group => ({
+          route: group.id,
+          name: group.name,
+          rows: group.models.map(model => ({
+            route: group.id, model: model.id, pinned: false, favorite: false,
+          })),
+        }))
+      }, [snap, state])
+
+      /**
+       * Split the catalogue into the sections the menu renders.
+       *
+       * Each row is placed exactly once, so nothing is offered twice: a model that
+       * is both pinned and favorited appears under Pinned only, matching the Host's
+       * own rank order where a pin outranks a favorite.
+       *
+       * @returns {{ pinned: object[], favorites: object[], groups: object[] }} the
+       *   sections, in the order they are rendered.
+       */
+      const sections = useMemo(() => {
+        const needle = query.trim().toLowerCase()
+        const matches = (row) => needle === '' || row.model.toLowerCase().includes(needle)
+        const pinned = []
+        const favorites = []
+        const byRoute = new Map()
+        for (const group of catalogue) {
+          const rows = group.rows.filter(matches)
+          byRoute.set(group.route, rows)
+          for (const row of rows) {
+            if (row.pinned) pinned.push(row)
+            else if (row.favorite) favorites.push(row)
+          }
+        }
+        const lifted = new Set([...pinned, ...favorites].map(row => `${row.route}/${row.model}`))
+        const groups = catalogue
           .map(group => ({
             ...group,
-            rows: group.rows.filter(row => needle === '' || row.model.toLowerCase().includes(needle)),
+            rows: (byRoute.get(group.route) ?? []).filter(row => !lifted.has(`${row.route}/${row.model}`)),
           }))
           .filter(group => group.rows.length > 0)
-      }, [snap, state, query])
+        return { pinned, favorites, groups }
+      }, [catalogue, query])
+
+      /**
+       * Whether a lifted section mixes routes, and so has to name them.
+       *
+       * The same model id can be served by several routes, so a row taken out of
+       * its group is ambiguous without its route. Naming it on every row of a
+       * single-route section would be noise, so this is asked per section.
+       *
+       * @param {object[]} rows - the section's rows.
+       * @returns {boolean} true when the rows span more than one route.
+       */
+      const spansRoutes = (rows) => new Set(rows.map(row => row.route)).size > 1
 
       const choose = useCallback(async (row) => {
         setFailure('')
@@ -722,6 +786,48 @@ window.__ModuleLoader__.load({
       }, [select, current, state])
 
       if (available !== true) return null
+
+      /**
+       * One selectable model row.
+       * @param {object} row - `{ route, model }`.
+       * @param {boolean} showRoute - whether to name the route beside the model.
+       * @returns {object} the row element.
+       */
+      const renderItem = (row, showRoute) => {
+        const overlayRow = overlay.get(`${row.route}/${row.model}`)
+        const status = overlayRow ? overlayRow.status : 'unknown'
+        const down = isProblem(status)
+        const active = current !== null && current.provider === row.route && current.model === row.model
+        return h('button', {
+          key: `${row.route}/${row.model}`,
+          type: 'button',
+          className: `llmm-item${active ? ' llmm-active' : ''}${down ? ' llmm-down' : ''}`,
+          title: overlayRow && overlayRow.reason ? overlayRow.reason : statusLabel(status),
+          onClick: () => { choose(row) },
+        },
+          h('span', { className: `llmm-dot ${statusTone(status)}` }),
+          h('span', { className: 'llmm-name' }, row.model),
+          showRoute ? h('span', { className: 'llmm-route' }, row.route) : null,
+          down ? h('span', { className: 'llmm-chip' }, statusLabel(status)) : null,
+          active ? h('span', { className: 'llmm-chip' }, t('selected')) : null,
+        )
+      }
+
+      /**
+       * One titled section of rows.
+       * @param {string} key - stable React key.
+       * @param {string} title - section heading.
+       * @param {object[]} rows - the rows.
+       * @param {boolean} accent - whether to tint the heading.
+       * @returns {object} the section element.
+       */
+      const renderSection = (key, title, rows, accent) => h('div', { key },
+        h('div', { className: `llmm-group${accent ? ' llmm-accent' : ''}` }, `${title} (${rows.length})`),
+        rows.map(row => renderItem(row, spansRoutes(rows))),
+      )
+
+      const shown = sections.pinned.length + sections.favorites.length
+        + sections.groups.reduce((total, group) => total + group.rows.length, 0)
 
       const triggerLabel = current === null
         ? t('pickerTitle')
@@ -754,27 +860,18 @@ window.__ModuleLoader__.load({
               }),
             ),
             h('div', { className: 'llmm-menu-body' },
-              groups.length === 0 ? h('div', { className: 'llmm-empty' }, t('noModels')) : null,
-              groups.map(group => h('div', { key: group.route },
-                h('div', { className: 'llmm-group' }, group.name || group.route),
-                group.rows.map((row) => {
-                  const overlayRow = overlay.get(`${row.route}/${row.model}`)
-                  const status = overlayRow ? overlayRow.status : 'unknown'
-                  const down = isProblem(status)
-                  const active = current !== null && current.provider === row.route && current.model === row.model
-                  return h('button', {
-                    key: `${row.route}/${row.model}`,
-                    type: 'button',
-                    className: `llmm-item${active ? ' llmm-active' : ''}${down ? ' llmm-down' : ''}`,
-                    title: overlayRow && overlayRow.reason ? overlayRow.reason : statusLabel(status),
-                    onClick: () => { choose(row) },
-                  },
-                    h('span', { className: `llmm-dot ${statusTone(status)}` }),
-                    h('span', { className: 'llmm-name' }, row.model),
-                    down ? h('span', { className: 'llmm-chip' }, statusLabel(status)) : null,
-                    active ? h('span', { className: 'llmm-chip' }, t('selected')) : null,
-                  )
-                }),
+              shown === 0 ? h('div', { className: 'llmm-empty' }, t('noModels')) : null,
+              // Pins and favorites first, across every route. Below, each route
+              // keeps its own section with those rows removed, so a model is never
+              // listed twice and the menu still offers the whole catalogue.
+              sections.pinned.length > 0
+                ? renderSection('llmm-pinned', t('sectionPinned'), sections.pinned, true)
+                : null,
+              sections.favorites.length > 0
+                ? renderSection('llmm-favorites', t('sectionFavorites'), sections.favorites, true)
+                : null,
+              sections.groups.map(group => renderSection(
+                group.route, group.name || group.route, group.rows, false,
               )),
             ),
             failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,

@@ -18,7 +18,7 @@ one flat list. Five things then go wrong at once, and none of them is the gatewa
 
 | Pain | What this plugin does |
 |---|---|
-| A long list, favorites buried | Pin and favorite models; the picker and the panel sort pinned → favorite → recent → rest |
+| A long list, favorites buried | Pin and favorite models; the picker lifts them into their own sections at the top, and the panel sorts pinned → favorite → recent → rest |
 | Retired models still listed; selecting one errors | Reconciles the route's `models:` list against the gateway's own `GET {baseURL}/models` directory and flags anything missing as retired |
 | Quota exhausted, manual switching | Watches `agent/request-error`, switches to the next usable model on a model-scoped quota failure, and shows a banner naming the model it moved for |
 | The same model served by several providers | Marks each row with how many other routes also serve it, instead of hiding the copies |
@@ -218,6 +218,28 @@ test.
 - **The composer model picker**: the managed picker (set `selector.mode: native` to
   withdraw it and get the shipped picker back untouched).
 - **Above the composer**: a banner when this session's model was switched.
+
+### The composer model picker
+
+The picker opens on **Pinned**, then **Favorites**, then one section per route. Pins and
+favorites are lifted *out* of their route and shown once, at the top, so a favorite is one
+click away no matter how many routes the profile has or how many models sit ahead of it
+alphabetically. Below the sections, each route still lists everything else, minus the rows
+already lifted — every listed model is offered exactly once, and hidden models are not
+offered at all.
+
+A model that is both pinned and favorited appears under **Pinned** only, matching the
+fallback chain's own precedence, where a pin outranks a favorite.
+
+Because a lifted row is no longer under its route's heading, a section that spans more than
+one route prints the route beside each model. The same model id on two routes is two
+different selections, and the row has to say which one it means. A section that stays on
+one route prints nothing, since the label would be noise on every row.
+
+Rows keep their health dot and reason chip, so an unusable model is visibly unusable here
+too — but it is still *selectable*. The plugin's view of a model can be stale, and hiding a
+model from the picker is the one thing this design refuses to do silently. Search filters
+across the lifted sections as well as the route groups.
 
 ### Panel controls
 

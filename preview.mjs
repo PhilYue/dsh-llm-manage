@@ -60,19 +60,33 @@ const row = (model, extra) => ({
 // Synthetic catalogue, and one row per status the panel can render, so the
 // preview exercises every badge and tone without naming a real deployment.
 const SNAPSHOT = {
-  groups: [{
-    route: ROUTE,
-    name: 'Example Gateway',
-    models: ['model-alpha', 'model-beta', 'model-gamma', 'model-delta', 'model-epsilon', 'model-zeta'],
-    rows: [
-      row('model-alpha', { pinned: true, favorite: true, status: 'ok', source: 'probe', reason: 'answered a minimal request', at: now - 90_000 }),
-      row('model-beta', { status: 'ok', source: 'passive', reason: 'in use', at: now - 240_000 }),
-      row('model-gamma', { status: 'quota', source: 'passive', reason: 'quota exhausted for this model', at: now - 600_000 }),
-      row('model-delta', { status: 'protocol', source: 'probe', reason: 'model not support', at: now - 3_600_000 }),
-      row('model-epsilon', { status: 'error', source: 'probe', reason: 'unexpected response body', at: now - 7_200_000, alsoOn: ['other-route'] }),
-      row('model-zeta', { status: 'retired', source: 'directory', reason: "not listed by the route's gateway directory", at: now - 60_000 }),
-    ],
-  }],
+  groups: [
+    {
+      route: ROUTE,
+      name: 'Example Gateway',
+      models: ['model-alpha', 'model-beta', 'model-gamma', 'model-delta', 'model-epsilon', 'model-zeta'],
+      rows: [
+        row('model-alpha', { pinned: true, favorite: true, status: 'ok', source: 'probe', reason: 'answered a minimal request', at: now - 90_000 }),
+        row('model-beta', { status: 'ok', source: 'passive', reason: 'in use', at: now - 240_000 }),
+        row('model-gamma', { status: 'ok', favorite: true, source: 'passive', reason: 'in use', at: now - 300_000 }),
+        row('model-delta', { status: 'protocol', source: 'probe', reason: 'model not support', at: now - 3_600_000 }),
+        row('model-epsilon', { status: 'error', source: 'probe', reason: 'unexpected response body', at: now - 7_200_000, alsoOn: ['other-route'] }),
+        row('model-zeta', { status: 'retired', source: 'directory', reason: "not listed by the route's gateway directory", at: now - 60_000 }),
+      ],
+    },
+    // A second route serving one of the SAME ids. It is what makes the picker's
+    // route labels necessary: `model-alpha` here is a different selection from
+    // `model-alpha` on the route above, and only the label says which is which.
+    {
+      route: 'mirror-route',
+      name: 'Mirror',
+      models: ['model-alpha', 'model-theta'],
+      rows: [
+        { ...row('model-alpha', { pinned: true, status: 'unknown', alsoOn: [ROUTE] }), route: 'mirror-route' },
+        { ...row('model-theta', { status: 'ok', source: 'passive', reason: 'in use', at: now - 120_000 }), route: 'mirror-route' },
+      ],
+    },
+  ],
   directory: [{ route: ROUTE, ok: true, count: 42, at: now - 30_000 }],
 }
 let delivered = false
@@ -96,9 +110,16 @@ window.__ModuleLoader__ = {
 await import(pathToFileURL(join(HERE, 'client.js')).href)
 
 const slots = []
+const dirSnapshot = { current: null, groups: [], retainedEffort: undefined }
 captured.apply({
   slots: { inject: (_k, cb) => { cb() }, register: (options, Component) => { slots.push({ options, Component }); return () => {} } },
-  modelDirectories: { directoryFor: () => ({ store: {}, load: async () => {}, select: async () => ({ ok: true, value: undefined }) }) },
+  modelDirectories: {
+    directoryFor: () => ({
+      store: { subscribe: () => () => {}, getSnapshot: () => dirSnapshot },
+      load: async () => {},
+      select: async () => ({ ok: true, value: undefined }),
+    }),
+  },
   sessions: { subagentAddress: () => undefined },
 })
 
@@ -129,13 +150,41 @@ if (tipNode) {
   tipNode.style.top = '150px'
 }
 
+// ── the composer picker, rendered open ──────────────────────────────────────
+// jsdom implements no layout, so the menu would be positioned from an all-zero
+// rect and pinned to the viewport's top-left with `position: fixed`. For a static
+// preview it is laid out in the flow instead, so the page shows the sections and
+// the real markup without pretending to show the real anchoring.
+const pickerSlot = slots.find(s => s.options.id === 'llm-manage-picker')
+const pickerContainer = window.document.createElement('div')
+window.document.body.appendChild(pickerContainer)
+const pickerRoot = pickerSlot === undefined ? null : createRoot(pickerContainer)
+if (pickerRoot !== null) {
+  await act(async () => {
+    pickerRoot.render(React.createElement(pickerSlot.Component, pickerSlot.options.inject('preview-session')))
+  })
+  await act(async () => {
+    pickerContainer.querySelector('.llmm-trigger')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 60))
+  })
+  const menu = pickerContainer.querySelector('.llmm-menu')
+  if (menu !== null) {
+    menu.style.position = 'static'
+    menu.style.width = '100%'
+    menu.style.maxHeight = 'none'
+  }
+}
+
 const css = Array.from(container.querySelectorAll('style')).map(node => node.textContent ?? '').join('\n')
 const html = container.innerHTML
+const pickerHtml = pickerContainer.innerHTML
 // Count while the tree is still mounted: unmounting empties the container.
 const rowCount = container.querySelectorAll('.llmm-row').length
 const actCount = container.querySelectorAll('.llmm-rowacts button').length
 const tipShown = container.querySelector('.llmm-tip') !== null
+const pickerSections = Array.from(pickerContainer.querySelectorAll('.llmm-group')).map(n => n.textContent)
 await act(async () => { root.unmount() })
+if (pickerRoot !== null) await act(async () => { pickerRoot.unmount() })
 rmSync(HOME, { recursive: true, force: true })
 
 const page = `<!doctype html>
@@ -162,8 +211,17 @@ ${css}
     The live panel resolves these colors from your active theme.
   </div>
   <div style="max-width:820px;margin:0 auto">${html}</div>
+  <div class="note" style="margin-top:24px">
+    The composer model picker, rendered open. <b>Pinned</b> and <b>Favorites</b> come first,
+    lifted out of their routes; the route is printed only on rows whose section spans more
+    than one route, because <code>model-alpha</code> on two routes is two selections. Each
+    route below still lists everything else, once. Here the menu is laid out in the flow;
+    live it is anchored to the trigger.
+  </div>
+  <div style="max-width:820px;margin:0 auto">${pickerHtml}</div>
 </body></html>
 `
 writeFileSync(OUT, page)
 console.log(`wrote ${OUT}`)
 console.log(`rows=${rowCount} rowActionButtons=${actCount} tooltipEl=${tipShown}`)
+console.log(`pickerSections=${pickerSections.join(' | ')}`)

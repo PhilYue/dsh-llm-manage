@@ -69,8 +69,22 @@ const PAGE = `<!doctype html>
     var rows = ['Alpha-Model', 'Beta-Model', 'Gamma-Model'].map(function (m) {
       return Object.assign({}, base, { model: m })
     })
-    var SNAPSHOT = { groups: [{ route: ROUTE, name: 'Example Gateway',
-      models: rows.map(function (r) { return r.model }), rows: rows }] }
+    // One pinned and one favorited row, plus a second route serving a row id that
+    // also exists above. That combination is what the picker's sections and their
+    // route labels exist for, and it is only measurable with real layout.
+    rows[1].pinned = true
+    rows[2].favorite = true
+    // Every model id here belongs to exactly one route, so a repeated name in the
+    // menu can only mean a lifted row was copied instead of moved. (An id served by
+    // two routes is a legitimate repeat, and verify-client.mjs covers that case
+    // with full route information, which a geometry probe cannot recover.)
+    var mirrorRows = [Object.assign({}, base, { route: 'mirror-route', model: 'Mirror-Model', pinned: true })]
+    var SNAPSHOT = { groups: [
+      { route: ROUTE, name: 'Example Gateway',
+        models: rows.map(function (r) { return r.model }), rows: rows },
+      { route: 'mirror-route', name: 'Mirror',
+        models: mirrorRows.map(function (r) { return r.model }), rows: mirrorRows },
+    ] }
     window.fetch = function () {
       return Promise.resolve(new Response(JSON.stringify({ ok: true, value: SNAPSHOT }),
         { status: 200, headers: { 'content-type': 'application/json' } }))
@@ -88,11 +102,18 @@ const PAGE = `<!doctype html>
   <script src="file://${join(HERE, 'client.js')}"></script>
   <script>
     var done = function () { log('DONE') }
+    var DIR_SNAPSHOT = { current: null, groups: [], retainedEffort: undefined }
     try {
       var slots = []
       captured.apply({
         slots: { inject: function (k, cb) { cb() }, register: function (o, C) { slots.push({ o: o, C: C }) } },
-        modelDirectories: { directoryFor: function () { return { store: {},
+        modelDirectories: { directoryFor: function () { return {
+          // The picker subscribes through useSyncExternalStore, so the store must
+          // exist, and getSnapshot must return the SAME object every call: a fresh
+          // object per call makes React update forever ("Maximum update depth
+          // exceeded") and the picker never renders a menu.
+          store: { subscribe: function () { return function () {} },
+            getSnapshot: function () { return DIR_SNAPSHOT } },
           load: async function () {}, select: async function () { return { ok: true, value: undefined } } } } },
         sessions: { subagentAddress: function () { return undefined } }
       })
@@ -135,6 +156,98 @@ const PAGE = `<!doctype html>
             log('textButtonGroupWidth=' + Math.round(textWidth))
             probe.remove()
 
+            // ── the composer model picker, in real layout ────────────────────
+            // Measured in its own phase, after the panel and tooltip checks: the
+            // picker mounts a second React root, and a failure in it must not be
+            // reported as a panel failure. Anything it throws is logged as
+            // PICKER THREW rather than escaping as a cross-origin "Script error.".
+            var guard = function (fn) {
+              return function () {
+                try { fn() } catch (e) { log('PICKER THREW: ' + (e && e.message)); done() }
+              }
+            }
+            var measurePicker = function (pickerHost) {
+              var menu = pickerHost.querySelector('.llmm-menu')
+              if (!menu) { log('FAIL picker menu did not open'); done(); return }
+              var heads = Array.prototype.slice.call(menu.querySelectorAll('.llmm-group'))
+              log('pickerSections=' + heads.map(function (nd) { return nd.textContent }).join(' | '))
+              var titleOf = function (nd) { return (nd.textContent || '').split(' (')[0] }
+              // The dictionary follows the browser's locale, so the assertions read
+              // the section by position and compare against either language rather
+              // than hard-coding English.
+              log('pickerFirstSection=' + (heads[0] ? titleOf(heads[0]) : ''))
+              log('pickerSecondSection=' + (heads[1] ? titleOf(heads[1]) : ''))
+              var isLifted = function (title) {
+                return title === 'Pinned' || title === '\u7f6e\u9876'
+                  || title === 'Favorites' || title === '\u6536\u85cf'
+              }
+              log('PICKER_FIRST_IS_PINNED=' + (heads[0] ? isLifted(titleOf(heads[0])) : false))
+              log('PICKER_SECOND_IS_FAVORITES=' +
+                (heads[1] ? titleOf(heads[1]) === 'Favorites' || titleOf(heads[1]) === '\u6536\u85cf' : false))
+
+              // The claim in one measurement: the pinned/favorite sections sit
+              // above every route section.
+              var firstRouteHead = heads.filter(function (nd) {
+                return !isLifted(titleOf(nd))
+              })[0]
+              log('PINNED_ABOVE_ROUTES=' +
+                (heads[0] && firstRouteHead
+                  ? heads[0].getBoundingClientRect().top < firstRouteHead.getBoundingClientRect().top
+                  : false))
+
+              // No row may be offered twice: the same name in two sections would
+              // mean the lift copied instead of moved.
+              var names = Array.prototype.slice.call(menu.querySelectorAll('.llmm-name'))
+                .map(function (nd) { return nd.textContent })
+              log('pickerRowCount=' + names.length)
+              log('pickerDistinctRows=' + new Set(names).size)
+
+              // A route label must appear only where a section spans routes (the
+              // mirror-route row), never on a single-route section's rows, and it
+              // must neither overlap the name nor overflow the row.
+              var body = menu.querySelector('.llmm-menu-body')
+              var labelled = Array.prototype.slice.call(menu.querySelectorAll('.llmm-item'))
+                .filter(function (item) { return item.querySelector('.llmm-route') !== null })
+              log('pickerLabelledRows=' + labelled.length)
+              // Only the Pinned section spans routes here (example-route +
+              // mirror-route), so the Favorites and route sections must carry no
+              // label at all: a route printed on every row would be noise.
+              // The sections are the children of the scroll body, not of the menu:
+              // the menu's own children are the search head and that body.
+              var perSectionLabels = Array.prototype.slice.call(body.children).map(function (section) {
+                return (section.querySelector('.llmm-group').textContent || '').split(' (')[0]
+                  + ':' + section.querySelectorAll('.llmm-route').length
+              })
+              log('pickerLabelsPerSection=' + perSectionLabels.join(','))
+              log('ROUTE_LABEL_NO_OVERLAP=' + labelled.every(function (item) {
+                var name = item.querySelector('.llmm-name').getBoundingClientRect()
+                var route = item.querySelector('.llmm-route').getBoundingClientRect()
+                return name.right <= route.left + 1
+              }))
+              log('ROUTE_LABEL_WITHIN_ROW=' + labelled.every(function (item) {
+                return item.querySelector('.llmm-route').getBoundingClientRect().right
+                  <= item.getBoundingClientRect().right + 1
+              }))
+              log('MENU_ROW_NO_HSCROLL=' + (body.scrollWidth <= body.clientWidth + 1))
+              done()
+            }
+            var runPickerChecks = guard(function () {
+              var pickerSlot = slots.filter(function (s) { return s.o.id === 'llm-manage-picker' })[0]
+              if (!pickerSlot) { log('FAIL no picker slot'); done(); return }
+              var pickerHost = document.createElement('div')
+              document.body.appendChild(pickerHost)
+              ReactDOM.createRoot(pickerHost).render(
+                React.createElement(pickerSlot.C, pickerSlot.o.inject('sess-browser')))
+              setTimeout(guard(function () {
+                var trigger = pickerHost.querySelector('.llmm-trigger')
+                if (!trigger) { log('FAIL picker rendered no trigger'); done(); return }
+                trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+                // The menu's position comes from a useEffect, which React runs
+                // after paint, so the node does not exist on the click's own tick.
+                setTimeout(guard(function () { measurePicker(pickerHost) }), 60)
+              }), 60)
+            })
+
             btn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
             setTimeout(function () {
               var tip = document.querySelector('.llmm-tip')
@@ -155,7 +268,7 @@ const PAGE = `<!doctype html>
                 setTimeout(function () {
                   var edge = document.querySelector('.llmm-tip').getBoundingClientRect()
                   log('EDGE_TOOLTIP_WITHIN_VIEWPORT=' + (edge.x >= 0 && edge.right <= window.innerWidth))
-                  done()
+                  setTimeout(runPickerChecks, 20)
                 }, 40)
               }
             }, 60)
@@ -230,6 +343,26 @@ check('the tooltip stays inside the viewport', line('TOOLTIP_WITHIN_VIEWPORT') =
 check('the tooltip is not a child of the scrolling row list', line('TOOLTIP_OUTSIDE_SCROLLER') === 'true')
 check('a button at the row edge still keeps its label on-screen',
   line('EDGE_TOOLTIP_WITHIN_VIEWPORT') === 'true')
+
+// ── the composer picker, measured ───────────────────────────────────────────
+check('the picker opens with its sections in a real engine',
+  (line('pickerSections') ?? '') !== '', line('pickerSections'))
+check('the picker leads with Pinned, then Favorites',
+  line('PICKER_FIRST_IS_PINNED') === 'true' && line('PICKER_SECOND_IS_FAVORITES') === 'true',
+  `${line('pickerFirstSection')} / ${line('pickerSecondSection')}`)
+check('pinned and favorite rows sit above every route section',
+  line('PINNED_ABOVE_ROUTES') === 'true')
+check('no row is offered twice in the menu',
+  num('pickerRowCount') !== undefined && num('pickerRowCount') === num('pickerDistinctRows'),
+  `${num('pickerRowCount')} rows, ${num('pickerDistinctRows')} distinct`)
+check('only a route-spanning section prints route labels',
+  (num('pickerLabelledRows') ?? 0) > 0
+  && /^[^:]+:[1-9]/.test(line('pickerLabelsPerSection') ?? '')
+  && (line('pickerLabelsPerSection') ?? '').split(',').slice(1).every(entry => entry.endsWith(':0')),
+  line('pickerLabelsPerSection'))
+check('a route label never overlaps the model name', line('ROUTE_LABEL_NO_OVERLAP') === 'true')
+check('a route label fits inside its row', line('ROUTE_LABEL_WITHIN_ROW') === 'true')
+check('the menu does not scroll horizontally', line('MENU_ROW_NO_HSCROLL') === 'true')
 
 const failed = results.filter(r => !r.passed)
 console.log(`\n${results.length - failed.length}/${results.length} checks passed`)
