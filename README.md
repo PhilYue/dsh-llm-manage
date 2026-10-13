@@ -7,9 +7,9 @@ fallback when one model's quota runs out.
 
 ![The model management panel](docs/panel.png)
 
-*Rendered by `node preview.mjs` from six fixture models, so every status the panel can show
-appears at once — usable, wrong protocol, failed, quota exhausted, retired, and in use.
-Colours are resolved from your active theme at runtime.*
+*Captured from the installed plugin in a running harness, with the statuses the panel can
+show: usable, wrong protocol, failed, quota exhausted, retired, and in use. The colours are
+whatever your active theme resolves, because the capture supplies no theme of its own.*
 
 ## Why
 
@@ -220,6 +220,28 @@ Some checks exist because the live harness caught bugs a shallower suite passed:
   DSH_LIVE_URL=http://127.0.0.1:3080/ DSH_LIVE_COOKIE='dsh-auth-...=...' node verify-live.mjs
   ```
 
+### Two more contract mistakes the suites had to learn
+
+Both of these shipped, both were green in every suite, and both were found by looking at
+the running app. They are worth stating because each one changed what the suites assert.
+
+**The theme cannot be supplied by the thing being tested.** The card was painted with
+`--dsw-alias-bg-overlay`, which the plugin token contract labels *"Overlay and popover
+background"* — a reasonable reading of the docs. Measured in the app it is `#e9ecf2`, a mid
+grey, darker than the white composer it drops out of; DSH's own popovers paint the
+translucent `--dsw-specific-menu` on a child layer with a backdrop blur instead. The suites
+could not catch it because they defined that token themselves: `verify-browser.mjs` had
+`--dsw-alias-bg-overlay:#fff`, and the deleted `preview.mjs` invented the same white. The
+suites now carry the values the app actually resolves, and `verify-browser.mjs` fails if the
+stylesheet reads any token its theme block does not define — 27 are read. `verify-live.mjs`
+asserts the painted surface against the token's real value.
+
+**A stylesheet in a template literal can truncate without a syntax error.** A backtick or
+`${` inside a CSS comment ends the literal early. The pieces often still re-parse as
+JavaScript, so `node --check` passes, and the failure that reaches you is a browser refusing
+the import — the whole client half silently absent. `verify-client.mjs` extracts the literal
+and asserts it is intact, which catches the case that parses but is wrong.
+
   The lesson generalizes past this bug: **a suite that supplies the context cannot verify
   the context.** An inject declaration is a contract with the runtime, and only the runtime
   can check it.
@@ -227,11 +249,20 @@ Some checks exist because the live harness caught bugs a shallower suite passed:
 ### Looking at the panel without restarting
 
 ```
-node preview.mjs         # writes panel-preview.html and panel-preview-picker.html
+DSH_LIVE_URL='http://127.0.0.1:3080/?token=…' node screenshot.mjs
 ```
 
-Renders the real panel and the model picker to standalone HTML files with theme tokens
-inlined, so the control design can be reviewed in a browser while the harness is running.
+Captures the panel and the model picker out of the running harness, light and dark, into
+`docs/`. It is the preview of record because it supplies nothing: it opens the URL `dsh web`
+printed and photographs what is there.
+
+This replaced a `preview.mjs` that rendered the plugin into a hand-written page with a
+hand-written theme. That page defined `--dsw-alias-bg-overlay:#fff` — a value the token never
+has in the app, where it is `#e9ecf2` — and defined only the 14 tokens the plugin contract
+documents while the stylesheet reads 27. The mock showed a white card; the app painted a grey
+one. A preview that supplies its own theme cannot show you the theme, and an approved mock is
+worse than no mock: it is the reason the grey card shipped. The capture is skipped with a
+non-zero-free exit when no harness answers, so it never reports a picture it did not take.
 It also reports each file's laid-out height, which is how the README screenshots are sized
 instead of guessed. A development aid, not a test.
 

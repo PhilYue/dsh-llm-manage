@@ -19,7 +19,7 @@
  *
  * Exits non-zero when a check fails.
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -506,6 +506,28 @@ check('a lifted section on one route names none',
   favoriteSection.items.map(row => `${row.name}${row.route === '' ? '' : `[${row.route}]`}`).join(', '))
 
 // ── the picker and the panel must stay one design ───────────────────────────
+// The stylesheet lives in a template literal, so a single backtick or `${` inside a
+// CSS comment truncates it. The module still parses in some of those shapes — the
+// pieces re-parse as JS — so `node --check` passes while the browser refuses the
+// import and the whole client half never boots. This happened twice while editing
+// the menu material. Assert the extracted literal instead of trusting the parser.
+{
+  const source = readFileSync(new URL('./client.js', import.meta.url), 'utf8')
+  const backtick = String.fromCharCode(96)
+  const decl = source.indexOf('const CSS')
+  const open = decl === -1 ? -1 : source.indexOf(backtick, decl)
+  const close = open === -1 ? -1 : source.indexOf(backtick, open + 1)
+  const literal = open === -1 || close === -1 ? '' : source.slice(open + 1, close)
+  const opens = literal.split('{').length - 1
+  const closes = literal.split('}').length - 1
+  const hasBacktick = literal.includes(backtick)
+  const hasInterpolation = literal.includes('$' + '{')
+  check('the client\'s stylesheet template survives its own comments',
+    literal.length > 1000 && !hasBacktick && !hasInterpolation
+      && opens === closes && literal.trimEnd().endsWith('}'),
+    `${literal.length} chars, braces ${opens}/${closes}, `
+      + `backticks=${hasBacktick ? 'yes' : 'no'}, interpolation=${hasInterpolation ? 'yes' : 'no'}`)
+}
 // Declaring a service by name is not enough when a service you call reaches for
 // another one internally: Cordis checks the CONSUMER's list, so the caller has to
 // declare the transitive keys too. The live app proved the cost of getting this
@@ -523,12 +545,20 @@ check('the client half declares the transitive services it needs',
 // Read from the rendered <style> element, not from the source: that is the CSS the
 // browser actually receives, so a rule that never reaches the page cannot pass.
 const cssText = Array.from(container.querySelectorAll('style')).map(node => node.textContent ?? '').join('\n')
-/** One rule's declarations, matched by exact selector text. */
+/**
+ * One rule's declarations, matched by exact selector text.
+ *
+ * Comment text is stripped from the selector side first. Splitting on `}` leaves the
+ * preceding comment attached to the next rule's selector, so a rule that documents
+ * itself above would otherwise be invisible to every lookup here — and a missing rule
+ * reads as "undefined" rather than as a failure, silently weakening the assertion.
+ */
 const declarationsOf = (selector) => {
   for (const chunk of cssText.split('}')) {
     const brace = chunk.indexOf('{')
     if (brace === -1) continue
-    if (chunk.slice(0, brace).trim() === selector) {
+    const head = chunk.slice(0, brace).replace(/\/\*[\s\S]*?\*\//g, '').trim()
+    if (head === selector) {
       return Object.fromEntries(chunk.slice(brace + 1).trim().split(';').filter(Boolean).map((entry) => {
         const colon = entry.indexOf(':')
         return [entry.slice(0, colon).trim(), entry.slice(colon + 1).trim()]
@@ -537,20 +567,64 @@ const declarationsOf = (selector) => {
   }
   return null
 }
+// The picker is a dropdown card, and DSH already has a design language for those:
+// ui-primitives Menu.module.css and MenuSurface.module.css, plus the shipped model
+// picker this plugin shadows (ui-model-selection ModelSelect.module.css). The panel
+// is an inline page surface and follows different metrics on purpose, so comparing
+// the two against each other was the wrong reference: it is what let the picker keep
+// an 8px card and 12px text while the shipped picker beside it used 16px and 13px.
+// These assert the picker against the design system's own numbers instead.
 const panelRow = declarationsOf('.llmm-row')
 const pickerRow = declarationsOf('.llmm-item')
-const boxProperties = ['display', 'align-items', 'gap', 'padding', 'border-radius', 'border']
-const mismatch = panelRow === null || pickerRow === null
-  ? 'a rule was not found in the rendered stylesheet'
-  : boxProperties.filter(key => panelRow[key] !== pickerRow[key])
-    .map(key => `${key}: panel "${panelRow[key]}" vs picker "${pickerRow[key]}"`).join('; ')
-check('a picker row is laid out exactly like a panel row', mismatch === '',
-  mismatch || boxProperties.map(key => `${key}=${pickerRow[key]}`).join(' '))
+// The shipped picker's option: box-sizing, 34px minimum, 5px/7px padding, md radius,
+// 13/18 text, 6px gap, no border.
+const optionContract = {
+  'box-sizing': 'border-box', 'min-height': '34px', padding: '5px 7px',
+  'border-radius': 'var(--dsw-radius-md)', 'font-size': '13px', 'line-height': '18px',
+  gap: '6px', border: '0',
+}
+const optionMismatch = Object.entries(optionContract)
+  .filter(([key, want]) => pickerRow?.[key] !== want)
+  .map(([key, want]) => `${key}: want "${want}" got "${pickerRow?.[key]}"`)
+check('a picker row uses the shipped model picker\'s own row metrics',
+  pickerRow !== null && optionMismatch.length === 0,
+  optionMismatch.join('; ') || Object.keys(optionContract).map(k => `${k}=${pickerRow[k]}`).join(' '))
+// The card measures like the shipped picker's menu: fixed, 1100, 4px inset, no
+// border, lg radius (MenuSurface without `compact`), max-content width.
+const menuContract = {
+  position: 'fixed', 'z-index': '1100', padding: '4px', border: '0',
+  'border-radius': 'var(--dsw-radius-lg)',
+}
+const menuDecls = declarationsOf('.llmm-menu')
+const menuMismatch = Object.entries(menuContract)
+  .filter(([key, want]) => menuDecls?.[key] !== want)
+  .map(([key, want]) => `${key}: want "${want}" got "${menuDecls?.[key]}"`)
+check('a picker card uses the shipped model picker\'s own card metrics',
+  menuDecls !== null && menuMismatch.length === 0,
+  menuMismatch.join('; ') || Object.keys(menuContract).map(k => `${k}=${menuDecls[k]}`).join(' '))
 
-const hoverMismatch = ['background', 'border-color'].filter(key =>
-  declarationsOf('.llmm-row:hover')[key] !== declarationsOf('.llmm-item:hover')[key])
-check('a picker row reacts to hover exactly like a panel row', hoverMismatch.length === 0,
-  hoverMismatch.join(', ') || declarationsOf('.llmm-item:hover')['background'])
+// The card must not be painted with the overlay/scrim token. That was the grey card:
+// --dsw-alias-bg-overlay is documented as "Overlay and popover background" but
+// resolves to a mid grey, so an opaque card built from it reads as a hole rather than
+// a surface. DSH's own popovers paint the translucent menu fill on a child layer.
+const menuMaterialRule = declarationsOf('.llmm-menu::before')
+check('the picker card paints the menu material, not the overlay scrim',
+  menuMaterialRule !== null
+  && (menuMaterialRule.background ?? '').startsWith('var(--dsw-specific-menu')
+  && (menuMaterialRule['backdrop-filter'] ?? '').includes('--dsw-menu-backdrop-filter'),
+  `background=${menuMaterialRule?.background} backdrop-filter=${menuMaterialRule?.['backdrop-filter']}`)
+// A fallback chain may legitimately name the scrim as the last resort, so look for a
+// direct paint: `background:` whose whole value is that token.
+check('nothing paints a surface directly from the overlay scrim token',
+  (cssText.match(/background:\s*var\(--dsw-alias-bg-overlay\)/g) ?? []).length === 0,
+  `${(cssText.match(/background:\s*var\(--dsw-alias-bg-overlay\)/g) ?? []).length} rule(s)`)
+
+const hoverMismatch = ['background'].filter(key =>
+  declarationsOf('.llmm-row:hover')?.[key] !== undefined
+  && declarationsOf('.llmm-item:hover')?.[key] !== declarationsOf('.llmm-row:hover')[key]
+  && declarationsOf('.llmm-item:hover')?.[key] !== 'var(--dsw-alias-interactive-bg-hover)')
+check('a picker row hovers with the design system\'s own fill', hoverMismatch.length === 0,
+  declarationsOf('.llmm-item:hover')?.background ?? 'no hover rule')
 
 const panelDim = declarationsOf('.llmm-row.llmm-hidden').opacity
 const pickerDim = declarationsOf('.llmm-item.llmm-down').opacity
@@ -558,21 +632,26 @@ check('both surfaces dim a de-emphasised row by the same amount', panelDim === p
   `panel ${panelDim} vs picker ${pickerDim}`)
 
 // Keyboard focus is the one interaction the panel states explicitly, on its icon
-// buttons; the picker's rows are the interactive element there, so they owe the
-// same outline rather than the browser default.
-check('a picker row shows the same focus ring as the panel\'s controls',
-  declarationsOf('.llmm-item:focus-visible')?.['outline']
-    === declarationsOf('.llmm-ibtn:focus-visible')?.['outline'],
-  `${declarationsOf('.llmm-item:focus-visible')?.['outline']}`)
+// buttons; the picker's rows are the interactive element there. DSH's own menus use
+// the hover fill as the focus indication (Menu.module.css .item:focus-visible) rather
+// than a ring, because a ring on top of the fill doubles the signal.
+check('a picker row marks keyboard focus the way the design system does',
+  declarationsOf('.llmm-item:focus-visible')?.outline === 'none'
+  && declarationsOf('.llmm-item:focus-visible')?.background === 'var(--dsw-alias-interactive-bg-hover)',
+  `outline=${declarationsOf('.llmm-item:focus-visible')?.outline} background=${declarationsOf('.llmm-item:focus-visible')?.background}`)
 
-// Section headings are structural labels, so they take the panel's secondary-label
-// treatment. The panel reserves the brand color for state (an active control), and a
-// tinted heading would be the one place the two surfaces disagreed about that.
-check('section headings use the panel\'s heading treatment, not the brand color',
-  declarationsOf('.llmm-group')?.color === 'var(--dsw-alias-label-secondary)'
-  && declarationsOf('.llmm-group')?.['font-weight'] === '600'
+// Section headings are heading rows, so they take the MenuGroup treatment:
+// 11/16 at weight 500 in the tertiary label colour, padded 4px 7px 2px.
+const heading = declarationsOf('.llmm-group')
+check('section headings use the design system\'s heading treatment, not the brand color',
+  heading !== null
+  && heading.color === 'var(--dsw-alias-label-tertiary)'
+  && heading['font-size'] === '11px'
+  && heading['font-weight'] === '500'
+  && heading['line-height'] === '16px'
+  && heading.padding === '4px 7px 2px'
   && cssText.includes('.llmm-accent') === false,
-  `color=${declarationsOf('.llmm-group')?.color} weight=${declarationsOf('.llmm-group')?.['font-weight']} accentRule=${cssText.includes('.llmm-accent')}`)
+  `color=${heading?.color} size=${heading?.['font-size']} weight=${heading?.['font-weight']} padding=${heading?.padding} accentRule=${cssText.includes('.llmm-accent')}`)
 
 // The route label is the same kind of annotation as the panel's "also on" chip, so
 // it must be that chip rather than look like one. Asserted on the DOM, because a

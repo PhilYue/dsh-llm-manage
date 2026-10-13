@@ -46,14 +46,34 @@ for (const [label, path] of [['react', REACT], ['react-dom', REACT_DOM]]) {
 }
 
 // ── the page: real client.js, real engine, real layout ──────────────────────
+// The theme tokens are the values the running app actually resolves, measured from
+// it rather than guessed. They used to be invented, and `--dsw-alias-bg-overlay:#fff`
+// was among them — a made-up white for a token whose real light value is #e9ecf2. That
+// fabrication is why the grey card passed every suite: the suites agreed with the
+// plugin about a colour the app never had. The dead-token check below now fails if the
+// stylesheet reads a token this block does not define.
 const PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><style>
-  :root{--dsw-alias-bg-base:#fff;--dsw-alias-bg-layer-1:#f7f8fa;--dsw-alias-bg-layer-2:#fff;
-    --dsw-alias-bg-overlay:#fff;--dsw-alias-border-l1:#e3e5e8;--dsw-alias-border-l2:#c9ccd1;
-    --dsw-alias-brand-primary:#1f6feb;--dsw-alias-label-primary:#1a1d21;
-    --dsw-alias-label-secondary:#6b7280;--dsw-alias-state-error-primary:#c8342f;
-    --dsw-alias-state-idle-primary:#9aa1ab;--dsw-alias-state-success-primary:#1a9d54;
-    --dsw-alias-state-warn-primary:#c98a00;}
+  :root{--dsw-alias-bg-base:#fff;--dsw-alias-bg-layer-1:#fff;--dsw-alias-bg-layer-2:#fff;
+    --dsw-alias-bg-layer-3:#fff;--dsw-alias-bg-overlay:#e9ecf2;
+    --dsw-alias-border-l1:rgba(0,0,0,.04);--dsw-alias-border-l2:rgba(0,0,0,.1);
+    --dsw-alias-border-l3:rgba(0,0,0,.12);--dsw-alias-border-l4:rgba(0,0,0,.16);
+    --dsw-alias-brand-primary:#0f1115;--dsw-alias-state-business-primary:#4176e6;
+    --dsw-alias-label-primary:#0f1115;--dsw-alias-label-secondary:#61666b;
+    --dsw-alias-label-tertiary:#81858c;--dsw-alias-label-caption:#adb2b8;
+    --dsw-alias-label-dimmed:#e1e5ee;--dsw-alias-menu-icon:#353638;
+    --dsw-alias-state-error-primary:#ec1313;--dsw-alias-state-idle-primary:#d4d4d4;
+    --dsw-alias-state-success-primary:#22c55e;--dsw-alias-state-warn-primary:#f59e0b;
+    --dsw-alias-interactive-bg-hover:rgba(38,49,72,.06);
+    --dsw-alias-interactive-bg-hover-danger:rgba(236,19,19,.05);
+    --dsw-alias-scrollbar-bg-l2:#e5e5e5;--dsw-alias-scrollbar-hover-l2:#d4d4d4;
+    --dsw-alias-tooltip-bg:#2c2c2e;--dsw-alias-bg-module-platform:#f5f6f7;
+    --dsw-radius-sm:8px;--dsw-radius-md:12px;--dsw-radius-lg:16px;
+    --dsw-specific-menu:rgba(248,249,250,.94);
+    --dsw-alias-menu-group-header-fill:rgba(248,249,250,.94);
+    --dsw-menu-backdrop-filter:blur(40px) saturate(150%);
+    --dsw-elevation-prominent:0 0 0 .5px rgba(0,0,0,.16),0 3px 8px 0 rgba(0,0,0,.04),0 0 20px 0 rgba(0,0,0,.05);
+    --dsw-static-neutral-bluish-00:#fff;}
   body{margin:0;padding:16px;font-family:-apple-system,sans-serif}
 </style></head>
 <body>
@@ -254,25 +274,57 @@ const PAGE = `<!doctype html>
               })
               log('pickerLabelsPerSection=' + perSectionLabels.join(','))
 
-              // The picker must be the panel's design, not a second one. Compared
-              // through getComputedStyle in a real engine, so this resolves the
-              // cascade AND the theme variables: a declaration that never wins
-              // cannot pass here the way it could when read from stylesheet text.
-              var panelRow = document.querySelector('.llmm-row')
+              // The picker is a dropdown card, so its reference is the design
+              // system's own menu metrics (ui-primitives Menu/MenuSurface, and the
+              // shipped model picker this plugin shadows), NOT the plugin's own
+              // inline panel — the panel is a page surface and follows different
+              // metrics deliberately. Compared through getComputedStyle in a real
+              // engine, so this resolves the cascade and the theme variables: a
+              // declaration that never wins cannot pass, and neither can one whose
+              // token is undefined.
               var pickerRow = menu.querySelector('.llmm-item')
-              if (!panelRow || !pickerRow) { log('FAIL no row to compare') } else {
-                var panelStyle = getComputedStyle(panelRow)
+              var menuCard = menu
+              if (!pickerRow || !menuCard) { log('FAIL no rows to measure') } else {
                 var pickerStyle = getComputedStyle(pickerRow)
-                var shared = ['display', 'alignItems', 'gap', 'fontSize',
-                  'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-                  'borderTopLeftRadius', 'borderTopWidth', 'borderTopStyle']
-                var styleDiff = shared.filter(function (prop) {
-                  return panelStyle[prop] !== pickerStyle[prop]
-                }).map(function (prop) {
-                  return prop + ':' + panelStyle[prop] + '!=' + pickerStyle[prop]
+                var cardStyle = getComputedStyle(menuCard)
+                // The shipped .option contract, resolved.
+                var wantRow = {'boxSizing': 'border-box', 'minHeight': '34px',
+                  'paddingTop': '5px', 'paddingRight': '7px', 'paddingBottom': '5px',
+                  'paddingLeft': '7px', 'borderTopLeftRadius': '12px', 'fontSize': '13px',
+                  'lineHeight': '18px', 'gap': '6px', 'borderTopWidth': '0px'}
+                var rowDiff = Object.keys(wantRow).filter(function (prop) {
+                  return pickerStyle[prop] !== wantRow[prop]
+                }).map(function (prop) { return prop + ':' + pickerStyle[prop] + '!=' + wantRow[prop] })
+                log('PICKER_ROW_DIFF=' + (rowDiff.length === 0 ? 'none' : rowDiff.join(',')))
+                log('PICKER_ROW_PROPS=' + Object.keys(wantRow).length)
+                // The shipped .menu contract, resolved: lg radius (MenuSurface is used
+                // without its compact flag), 4px inset, no border.
+                var wantCard = {'position': 'fixed', 'paddingTop': '4px',
+                  'borderTopLeftRadius': '16px', 'borderTopWidth': '0px'}
+                var cardDiff = Object.keys(wantCard).filter(function (prop) {
+                  return cardStyle[prop] !== wantCard[prop]
+                }).map(function (prop) { return prop + ':' + cardStyle[prop] + '!=' + wantCard[prop] })
+                log('PICKER_CARD_DIFF=' + (cardDiff.length === 0 ? 'none' : cardDiff.join(',')))
+                log('PICKER_CARD_PROPS=' + Object.keys(wantCard).length)
+                // Every token the plugin's stylesheet reads must resolve in this
+                // theme. An undefined custom property makes the whole declaration
+                // invalid at computed-value time, so a typo or a token that only
+                // exists in some other theme shows up here as a silent 0px/initial
+                // rather than an error. This is the guard the invented token block
+                // could not provide.
+                var cssText = Array.prototype.slice.call(document.querySelectorAll('style'))
+                  .map(function (s) { return s.textContent || '' }).join('\\n')
+                var used = {}
+                var re = /var\\(\\s*(--[a-zA-Z0-9-]+)/g
+                var m
+                while ((m = re.exec(cssText)) !== null) used[m[1]] = true
+                var rootStyle = getComputedStyle(document.documentElement)
+                var missing = Object.keys(used).filter(function (name) {
+                  return rootStyle.getPropertyValue(name).trim() === ''
+                    && document.body && getComputedStyle(document.body).getPropertyValue(name).trim() === ''
                 })
-                log('ROW_STYLE_DIFF=' + (styleDiff.length === 0 ? 'none' : styleDiff.join(',')))
-                log('ROW_STYLE_PROPS_COMPARED=' + shared.length)
+                log('DEAD_TOKENS=' + (missing.length === 0 ? 'none' : missing.join(',')))
+                log('TOKENS_USED=' + Object.keys(used).length)
               }
               log('ROUTE_LABEL_NO_OVERLAP=' + labelled.every(function (item) {
                 var name = item.querySelector('.llmm-name').getBoundingClientRect()
@@ -419,12 +471,24 @@ check('a route label never overlaps the model name', line('ROUTE_LABEL_NO_OVERLA
 check('a route label fits inside its row', line('ROUTE_LABEL_WITHIN_ROW') === 'true')
 check('the menu does not scroll horizontally', line('MENU_ROW_NO_HSCROLL') === 'true')
 
-// The picker and the panel must compute to one design. Asserted on computed styles
-// in a real engine, where the cascade and the theme variables are resolved, so this
-// catches a rule that is present in the stylesheet but never actually applied.
-check('a picker row computes identically to a panel row',
-  line('ROW_STYLE_DIFF') === 'none',
-  `${line('ROW_STYLE_DIFF')} (${num('ROW_STYLE_PROPS_COMPARED')} properties compared)`)
+// The picker must compute to the design system's own menu metrics. Asserted on
+// computed styles in a real engine, where the cascade and the theme variables are
+// resolved, so this catches a rule that is present in the stylesheet but never
+// actually applied — and a token that is undefined, which would otherwise make the
+// declaration invalid and silently render an initial value.
+check('a picker row computes to the shipped model picker\'s row metrics',
+  line('PICKER_ROW_DIFF') === 'none',
+  `${line('PICKER_ROW_DIFF')} (${num('PICKER_ROW_PROPS')} properties compared)`)
+check('a picker card computes to the shipped model picker\'s card metrics',
+  line('PICKER_CARD_DIFF') === 'none',
+  `${line('PICKER_CARD_DIFF')} (${num('PICKER_CARD_PROPS')} properties compared)`)
+// The theme block above stands in for the app's theme. If the stylesheet reads a token
+// the theme does not define, the property using it becomes invalid at computed-value
+// time and renders an initial value with no error anywhere. That is how a fabricated
+// token value stayed invisible: the suites defined white for a token the app paints grey.
+check('every theme token the stylesheet reads is defined',
+  line('DEAD_TOKENS') === 'none',
+  `${line('DEAD_TOKENS')} (${num('TOKENS_USED')} tokens used)`)
 
 
 const failed = results.filter(r => !r.passed)

@@ -286,7 +286,7 @@ window.__ModuleLoader__.load({
 @keyframes llmm-rotate{to{transform:rotate(360deg)}}
 /* The hover label. Fixed positioning matters: the row list is a scroll
    container, so an in-flow tooltip would be clipped at its edges. */
-.llmm-tip{position:fixed;z-index:80;transform:translate(-50%,-100%);pointer-events:none;padding:3px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);font-size:11px;line-height:1.5;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.16);animation:llmm-tip-in .1s ease-out}
+.llmm-tip{position:fixed;z-index:80;transform:translate(-50%,-100%);pointer-events:none;padding:3px 7px;border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-tooltip-bg);color:var(--dsw-static-neutral-bluish-00);font-size:13px;line-height:20px;white-space:nowrap;animation:llmm-tip-in .15s ease-out}
 @keyframes llmm-tip-in{from{opacity:0;transform:translate(-50%,-90%)}to{opacity:1;transform:translate(-50%,-100%)}}
 .llmm-rows{display:flex;flex-direction:column;gap:4px;max-height:340px;overflow:auto;margin-top:6px}
 .llmm-row{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;border:1px solid transparent}
@@ -302,27 +302,61 @@ window.__ModuleLoader__.load({
 .llmm-row:hover .llmm-rowacts,.llmm-row:focus-within .llmm-rowacts{opacity:1}
 .llmm-chip{font-size:11px;padding:1px 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);flex:none}
 .llmm-err{color:var(--dsw-alias-state-error-primary);margin-top:6px}
-.llmm-trigger{display:flex;align-items:center;gap:6px;max-width:220px;font:inherit;padding:4px 8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}
+.llmm-trigger{display:flex;align-items:center;gap:6px;max-width:220px;font:inherit;padding:4px 8px;border-radius:var(--dsw-radius-sm);border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);cursor:pointer}
 .llmm-trigger:hover{border-color:var(--dsw-alias-border-l2)}
+.llmm-trigger:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary);outline-offset:1px}
 .llmm-trigger.llmm-locked{opacity:.55;cursor:default}
 .llmm-trigger-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.llmm-menu{position:fixed;z-index:60;width:min(520px,92vw);max-height:min(440px,70vh);display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-bg-overlay);box-shadow:0 12px 32px rgba(0,0,0,.16);overflow:hidden;font-size:12px;color:var(--dsw-alias-label-primary)}
-.llmm-menu-head{padding:8px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;gap:8px;align-items:center}
-.llmm-input{font:inherit;flex:1;padding:5px 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary)}
-.llmm-input:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.llmm-menu-body{overflow:auto;padding:4px}
-.llmm-group{position:sticky;top:0;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-secondary);padding:6px 8px 2px;font-weight:600}
+/* The dropdown card. It takes the same material as every other DSH popover
+   (ui-primitives Menu.module.css, and the panel modules that copy it): no border,
+   elevation-prominent, and the surface painted on a ::before pseudo-element so the
+   translucent menu fill and its backdrop blur sit behind the content instead of
+   washing it out.
+   Why not --dsw-alias-bg-overlay, which the plugin token contract labels
+   "Overlay and popover background": measured in the running app it resolves to
+   rgb(233,236,242) in light and rgb(97,102,107) in dark. Painted as an opaque card
+   that reads as flat grey -- darker than the white composer it drops out of, and
+   muddy in dark mode. DSH's own popovers do not use it either; they use the
+   translucent --dsw-specific-menu plus backdrop-filter, which over a white page
+   resolves to near-white. That is the material this card now matches. */
+.llmm-menu{position:fixed;z-index:1100;width:max-content;min-width:min(240px,100vw - 32px);max-width:min(420px,100vw - 32px);max-height:min(360px,calc(100vh - 96px));display:flex;flex-direction:column;padding:4px;isolation:isolate;border:0;border-radius:var(--dsw-radius-lg);overflow:hidden;box-shadow:var(--dsw-elevation-prominent,0 0 0 .5px var(--dsw-alias-border-l1),0 3px 8px rgba(0,0,0,.04),0 0 20px rgba(0,0,0,.05));--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);color:var(--dsw-alias-label-primary);font-size:13px}
+/* The material sits on a pseudo-element behind the content rather than on the card
+   itself: a backdrop-filter on the card would make it a backdrop root and would
+   clip nothing useful, and the scrolling list has to stay above the fill. */
+.llmm-menu::before{content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-overlay)));backdrop-filter:var(--dsw-menu-backdrop-filter,none)}
+.llmm-menu-head{flex:none;display:flex;gap:8px;align-items:center;margin:2px 0 3px}
+/* DSH's own model picker keeps the search borderless and transparent inside the
+   card, and marks focus with the row-level hover fill rather than a ring. */
+.llmm-input{font:inherit;font-size:12px;flex:1;min-width:0;padding:5px 7px;border:0 solid transparent;border-radius:var(--dsw-radius-md);background:transparent;color:var(--dsw-alias-label-primary)}
+.llmm-input::placeholder{color:var(--dsw-alias-label-caption)}
+.llmm-input:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-menu-body{flex:auto;min-height:0;overflow-y:auto;overflow-x:hidden}
+/* Section headings take the Menu primitive's heading metrics (MenuGroup.module.css):
+   11/16 at weight 500 in tertiary. One deliberate difference: DSH toggles a fill on
+   only while the heading is stuck to the top, driving it from an IntersectionObserver;
+   this card keeps the fill on always. Always-on is visually identical when the list is
+   scrolled (the case the fill exists for) and avoids rows sliding under transparent
+   text when it is not. */
+.llmm-group{position:sticky;top:0;z-index:1;padding:4px 7px 2px;font-size:11px;line-height:16px;font-weight:500;color:var(--dsw-alias-label-tertiary);background:var(--dsw-alias-menu-group-header-fill,var(--dsw-alias-bg-layer-2))}
+/* MenuGroup separates consecutive groups by 3px; same rhythm here. */
+.llmm-menu-body > section + section{margin-top:3px}
 /* The route is the same kind of annotation as the panel's "also on" chip: extra
    metadata about one model. Reusing .llmm-chip keeps the two surfaces agreeing on
    how that looks instead of inventing a second treatment for it. */
 .llmm-route{margin-left:auto}
-.llmm-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;font:inherit;padding:4px 6px;border-radius:6px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer}
-.llmm-item:hover{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-border-l1)}
-.llmm-item:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.llmm-item.llmm-active{border-color:var(--dsw-alias-brand-primary)}
+/* Row metrics come from the shipped model picker's own option
+   (ui-model-selection ModelSelect.module.css .option): 34px minimum, 5px/7px padding,
+   md radius, 13/18 text. This card replaces that picker, so it should measure the
+   same as the thing it replaces. */
+.llmm-item{display:flex;align-items:center;gap:6px;box-sizing:border-box;width:auto;min-width:100%;min-height:34px;padding:5px 7px;border:0;border-radius:var(--dsw-radius-md);background:transparent;color:inherit;font:inherit;font-size:13px;line-height:18px;text-align:left;cursor:pointer;outline:none}
+.llmm-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
+/* Keyboard focus is the same fill the pointer gets: the fill IS the row's focus
+   indication, and a default ring on top of it would double the signal. */
+.llmm-item:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-item.llmm-active{background:var(--dsw-alias-interactive-bg-hover)}
 .llmm-item.llmm-down{opacity:.55}
-.llmm-empty{padding:12px;color:var(--dsw-alias-label-secondary);text-align:center}
-.llmm-banner{display:flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-primary)}
+.llmm-empty{padding:8px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.llmm-banner{display:flex;align-items:center;gap:8px;margin:4px 0;padding:6px 10px;border-radius:var(--dsw-radius-md);border:1px solid var(--dsw-alias-state-warn-primary);background:var(--dsw-alias-bg-layer-2);font-size:12px;color:var(--dsw-alias-label-primary)}
 .llmm-banner b{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .llmm-banner .llmm-grow{flex:1}
 `

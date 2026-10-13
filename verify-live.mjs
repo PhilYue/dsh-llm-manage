@@ -233,6 +233,62 @@ async function main() {
   })()`)
 
   check('the picker menu opens in the real composer', menu.opened === true, JSON.stringify(menu).slice(0, 120))
+
+  // The card's surface, measured against the theme the page is actually running.
+  // This is the check the grey card would have failed: the plugin painted
+  // --dsw-alias-bg-overlay, which the token contract documents as the popover
+  // background but which resolves to a mid grey (#e9ecf2 light / #61666b dark) —
+  // darker than the white composer it drops out of. Asserting a raw colour would
+  // pin the suite to one theme, so assert the relationship instead: the card must
+  // not be that scrim token, and it must sit close to the page in light mode and
+  // close to the raised layers in dark mode, i.e. read as a surface, not a shadow.
+  const surface = await evaluate(`(() => {
+    const menuEl = document.querySelector('.llmm-menu')
+    if (!menuEl) return { ok: false }
+    const paint = getComputedStyle(menuEl, '::before').backgroundColor
+    const pageBg = getComputedStyle(document.body).backgroundColor
+    // Resolve the scrim token through the browser rather than parsing it: custom
+    // properties come back as authored (#e9ecf2), and a hex parser here would
+    // silently read null and make the comparison vacuous.
+    const probe = document.createElement('div')
+    probe.style.backgroundColor = 'var(--dsw-alias-bg-overlay)'
+    document.body.appendChild(probe)
+    const scrimColor = getComputedStyle(probe).backgroundColor
+    probe.remove()
+    const parse = (c) => {
+      const m = String(c).match(/rgba?\\(([^)]+)\\)/)
+      if (!m) return null
+      const p = m[1].split(',').map(Number)
+      return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }
+    }
+    const over = (fg, bg) => {
+      const f = parse(fg); const b = parse(bg)
+      if (!f || !b) return null
+      return { r: f.r * f.a + b.r * (1 - f.a), g: f.g * f.a + b.g * (1 - f.a), b: f.b * f.a + b.b * (1 - f.a) }
+    }
+    const painted = over(paint, pageBg)
+    const scrim = over(scrimColor, pageBg)
+    const luma = (c) => c === null ? null : (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b)
+    const distance = (a, b) => a === null || b === null ? null
+      : Math.round(Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2))
+    return {
+      ok: true, paint, scrimColor,
+      luma: Math.round(luma(painted)),
+      scrimLuma: Math.round(luma(scrim)),
+      distanceFromPage: distance(painted, parse(pageBg)),
+      distanceFromScrim: distance(painted, scrim),
+    }
+  })()`)
+  // The material is the menu fill (58%/45% opaque light/dark) composited over the
+  // page, so a near-white page yields a near-white card and a #151517 page a dark
+  // one. "Reads as a surface" = the card's luminance stays on the page's side.
+  const cardSurfaceOk = surface.ok === true && surface.distanceFromScrim > 4
+    && (surface.luma > 200 ? surface.distanceFromPage <= 12 : surface.luma < 90)
+  check('the menu card takes the menu material, not the overlay scrim', cardSurfaceOk,
+    surface.ok
+      ? `painted=${surface.paint} luma=${surface.luma} vs scrim luma=${surface.scrimLuma} `
+        + `(distance ${surface.distanceFromScrim}, from page ${surface.distanceFromPage})`
+      : 'the menu did not render')
   const sections = menu.sections ?? []
   const pinnedFirst = /^(Pinned|置顶) \(/.test(sections[0]?.title ?? '')
   check('the menu leads with the pinned section', pinnedFirst, sections.map(s => s.title).join(' | '))
