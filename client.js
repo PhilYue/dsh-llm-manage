@@ -930,7 +930,15 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots', 'modelDirectories', 'sessions'],
+      // `remote` and `remote.session` are not used by name here, but they are
+      // required all the same: Cordis scopes a service proxy to the *consumer's*
+      // inject list, and `modelDirectories.directoryFor()` reaches
+      // `this.ctx.remote.session` internally. Declaring only the services called
+      // directly made that call throw "cannot get property remote.session without
+      // inject", which crashed this slot entry — and with it the picker and every
+      // rule in its <style>, since `Style` renders inside the same subtree. The
+      // shipped picker declares the same key set for the same reason.
+      inject: ['slots', 'modelDirectories', 'sessions', 'remote', 'remote.session'],
       apply(ctx) {
         // The panel rides the provider card its settings namespace owns, which
         // is where this route's models are already configured.

@@ -152,12 +152,13 @@ catalogue, because verifying all of it at once is what would rate-limit you out.
 
 ## Verifying it
 
-Three suites, all runnable without any particular deployment:
+Four suites, all runnable without any particular deployment:
 
 ```
 node verify.mjs          # Host half: registry, gateway, classification, fallback
 node verify-client.mjs   # Browser half: renders the panel in jsdom and clicks it
 node verify-browser.mjs  # Control geometry in a real engine (headless Chrome)
+node verify-live.mjs     # The whole thing against a RUNNING harness (opt-in)
 ```
 
 Each suite picks a mode automatically:
@@ -201,6 +202,27 @@ Some checks exist because the live harness caught bugs a shallower suite passed:
   cannot be measured in-process. It loads the real panel into headless Chrome and asserts
   the geometry the design depends on, then skips with exit 0 when no Chrome-family binary
   is present (`CHROME_PATH` overrides).
+- **`verify-live.mjs`** exists because every other suite builds its own page and hands the
+  plugin a context it controls — so none of them can catch a contract they do not enforce.
+  The plugin declared `slots`, `modelDirectories` and `sessions` at the top level, then
+  called `modelDirectories.directoryFor()`, which internally reaches
+  `this.ctx.remote.session`. Cordis checks the **consumer's** inject list, so in the live app
+  that read threw `cannot get property "remote.session" without inject`, the picker's slot
+  entry crashed, and because `Style` renders inside that same subtree the composer's model
+  control lost **every rule in its stylesheet**. All three suites were green: the hand-built
+  contexts were plain objects that enforced nothing.
+
+  It opens the URL `dsh web` prints — in a real engine, against the real profile, real
+  catalogue and real composer — and skips with exit 0 when no live harness answers:
+
+  ```
+  DSH_LIVE_URL='http://127.0.0.1:3080/?token=...' node verify-live.mjs
+  DSH_LIVE_URL=http://127.0.0.1:3080/ DSH_LIVE_COOKIE='dsh-auth-...=...' node verify-live.mjs
+  ```
+
+  The lesson generalizes past this bug: **a suite that supplies the context cannot verify
+  the context.** An inject declaration is a contract with the runtime, and only the runtime
+  can check it.
 
 ### Looking at the panel without restarting
 

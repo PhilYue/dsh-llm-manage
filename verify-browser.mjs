@@ -103,20 +103,54 @@ const PAGE = `<!doctype html>
   <script>
     var done = function () { log('DONE') }
     var DIR_SNAPSHOT = { current: null, groups: [], retainedEffort: undefined }
-    try {
-      var slots = []
-      captured.apply({
-        slots: { inject: function (k, cb) { cb() }, register: function (o, C) { slots.push({ o: o, C: C }) } },
-        modelDirectories: { directoryFor: function () { return {
+    // The declared inject list, enforced the way Cordis enforces it: a service the
+    // list omits throws on read. This page otherwise hands the plugin a plain object,
+    // which enforces nothing - and that is how a missing "remote" declaration once
+    // took the picker's whole stylesheet down in the real app while every suite here
+    // stayed green. directoryFor() reads remote.session because the shipped
+    // ModelDirectoryResolver does, so the read is mirrored below.
+    var DECLARED = new Set((captured.inject || []))
+    var slots = []
+    var SERVICES = {
+      slots: { inject: function (k, cb) { cb() }, register: function (o, C) { slots.push({ o: o, C: C }) } },
+      sessions: { subagentAddress: function () { return undefined } },
+      remote: { session: { verb: async function () { return undefined } } }
+    }
+    var CTX = {}
+    ;['slots', 'sessions', 'remote', 'modelDirectories'].forEach(function (name) {
+      Object.defineProperty(CTX, name, {
+        get: function () {
+          if (!DECLARED.has(name)) throw new Error('cannot get property "' + name + '" without inject')
+          if (name !== 'remote') return SERVICES[name]
+          return { get session() {
+            if (!DECLARED.has('remote.session')) throw new Error('cannot get property "remote.session" without inject')
+            return SERVICES.remote.session
+          } }
+        },
+      })
+    })
+    SERVICES.modelDirectories = {
+      directoryFor: function () {
+        // The real resolver reads this.ctx.remote.session here, which is why the
+        // consumer has to declare remote.session even though it never names it.
+        void CTX.remote.session
+        return {
           // The picker subscribes through useSyncExternalStore, so the store must
           // exist, and getSnapshot must return the SAME object every call: a fresh
           // object per call makes React update forever ("Maximum update depth
           // exceeded") and the picker never renders a menu.
           store: { subscribe: function () { return function () {} },
             getSnapshot: function () { return DIR_SNAPSHOT } },
-          load: async function () {}, select: async function () { return { ok: true, value: undefined } } } } },
-        sessions: { subagentAddress: function () { return undefined } }
-      })
+          load: async function () {}, select: async function () { return { ok: true, value: undefined } } }
+      },
+    }
+    try {
+      captured.apply(CTX)
+    } catch (error) {
+      log('FAIL applying the client half: ' + error.message)
+      done()
+    }
+    {
       var slot = slots.filter(function (s) { return s.o.id === 'llm-manage-panel' })[0]
       if (!slot) { log('FAIL no panel slot'); done() } else {
         var root = ReactDOM.createRoot(document.getElementById('app'))
@@ -296,7 +330,7 @@ const PAGE = `<!doctype html>
           }
         }, 120)
       }
-    } catch (error) { log('FAIL ' + error.message); done() }
+    }
   </script>
 </body></html>
 `

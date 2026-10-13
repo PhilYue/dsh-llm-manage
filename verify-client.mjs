@@ -167,20 +167,53 @@ if (captured === undefined) throw new Error('client.js did not call __ModuleLoad
 const dirSnapshot = { current: null, groups: [], retainedEffort: undefined }
 const dirStore = { subscribe: () => () => {}, getSnapshot: () => dirSnapshot }
 const selections = []
-const clientCtx = {
+// Cordis scopes a service proxy to the CONSUMER's declared inject list: reading a
+// service the list omits throws `cannot get property "X" without inject`. This suite
+// handed the client half a plain object, so it enforced nothing — and passed while
+// the live app crashed the picker's slot entry for a missing `remote` declaration,
+// taking the picker's entire <style> with it.
+//
+// Only registered SERVICE paths are gated: `remote.session` is its own service,
+// while `slots.inject` is a method on the `slots` service and stays reachable.
+const clientDeclared = new Set(captured.inject ?? [])
+const clientServices = {
   slots: {
     inject: (_key, callback) => { callback() },
     register: (options, Component) => { slots.push({ options, Component }); return () => {} },
   },
-  modelDirectories: {
-    directoryFor: () => ({
-      store: dirStore,
-      load: async () => {},
-      select: async (selection) => { selections.push(selection); return { ok: true, value: undefined } },
-    }),
-  },
   sessions: { subagentAddress: () => undefined },
+  // The resolver's own face: `directoryFor` reads these off the consumer's scope,
+  // exactly as the shipped ModelDirectoryResolver does with `this.ctx`. That is why
+  // declaring only the services called by name is not enough.
+  modelDirectories: {
+    directoryFor: () => {
+      void clientCtx.sessions.subagentAddress('probe')
+      void clientCtx.remote.session
+      return {
+        store: dirStore,
+        load: async () => {},
+        select: async (selection) => { selections.push(selection); return { ok: true, value: undefined } },
+      }
+    },
+  },
+  remote: { session: { verb: () => Promise.resolve(undefined) } },
 }
+const clientCtx = (() => {
+  const require_ = (path) => {
+    if (!clientDeclared.has(path)) throw new Error(`cannot get property "${path}" without inject`)
+  }
+  const scope = {}
+  for (const name of ['slots', 'sessions', 'modelDirectories']) {
+    Object.defineProperty(scope, name, { get: () => { require_(name); return clientServices[name] } })
+  }
+  Object.defineProperty(scope, 'remote', {
+    get: () => {
+      require_('remote')
+      return { get session() { require_('remote.session'); return clientServices.remote.session } }
+    },
+  })
+  return scope
+})()
 captured.apply(clientCtx)
 
 const panelSlot = slots.find(s => s.options.id === 'llm-manage-panel')
@@ -383,8 +416,27 @@ for (const [model, route, list] of [
 const pickerContainer = window.document.createElement('div')
 window.document.body.appendChild(pickerContainer)
 const pickerRoot = createRoot(pickerContainer)
+// Guarded on purpose: an undeclared service makes the inject face throw, and an
+// unguarded throw here would abort the run instead of failing one check — hiding
+// every assertion after it. That is exactly how the live regression escaped notice.
+let pickerInjected = null
+let pickerInjectError = ''
+try {
+  pickerInjected = pickerSlot.options.inject('sess-picker')
+} catch (error) {
+  pickerInjectError = String(error?.message ?? error)
+}
+check('the picker\'s inject face resolves against the declared services',
+  pickerInjectError === '', pickerInjectError || 'resolved')
+if (pickerInjectError !== '') {
+  // Render it anyway with a stand-in face, so the section assertions below still
+  // produce meaningful failures rather than a cascade of null dereferences.
+  pickerInjected = {
+    available: true, directory: dirStore, load: () => {}, select: () => Promise.resolve(undefined),
+  }
+}
 await act(async () => {
-  pickerRoot.render(React.createElement(pickerSlot.Component, pickerSlot.options.inject('sess-picker')))
+  pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected))
 })
 await act(async () => {
   const trigger = pickerContainer.querySelector('.llmm-trigger')
@@ -454,6 +506,13 @@ check('a lifted section on one route names none',
   favoriteSection.items.map(row => `${row.name}${row.route === '' ? '' : `[${row.route}]`}`).join(', '))
 
 // ── the picker and the panel must stay one design ───────────────────────────
+// Declaring a service by name is not enough when a service you call reaches for
+// another one internally: Cordis checks the CONSUMER's list, so the caller has to
+// declare the transitive keys too. The live app proved the cost of getting this
+// wrong — the picker's slot entry crashed and rendered none of its CSS.
+check('the client half declares the transitive services it needs',
+  clientDeclared.has('remote') && clientDeclared.has('remote.session'),
+  `inject = [${[...clientDeclared].join(', ')}]`)
 // The picker is the newer surface, and it drifted: a 10px menu radius against the
 // panel's 8px, rows padded 5px 8px against 4px 6px, a hover that changed the
 // background but not the border, rows dimmed to .6 where the panel dims to .55, and

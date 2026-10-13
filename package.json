@@ -22,6 +22,7 @@
     "verify.mjs",
     "verify-client.mjs",
     "verify-browser.mjs",
+    "verify-live.mjs",
     "preview.mjs",
     "README.md",
     "LICENSE"
