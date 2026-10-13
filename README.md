@@ -205,12 +205,13 @@ Some checks exist because the live harness caught bugs a shallower suite passed:
 ### Looking at the panel without restarting
 
 ```
-node preview.mjs         # writes panel-preview.html
+node preview.mjs         # writes panel-preview.html and panel-preview-picker.html
 ```
 
-Renders the real panel to a standalone HTML file with theme tokens inlined, so the control
-design can be reviewed in a browser while the harness is running. A development aid, not a
-test.
+Renders the real panel and the model picker to standalone HTML files with theme tokens
+inlined, so the control design can be reviewed in a browser while the harness is running.
+It also reports each file's laid-out height, which is how the README screenshots are sized
+instead of guessed. A development aid, not a test.
 
 ## Where it appears
 
@@ -220,6 +221,8 @@ test.
 - **Above the composer**: a banner when this session's model was switched.
 
 ### The composer model picker
+
+![The model picker, showing Pinned and Favorites above the route sections](docs/picker.png)
 
 The picker opens on **Pinned**, then **Favorites**, then one section per route. Pins and
 favorites are lifted *out* of their route and shown once, at the top, so a favorite is one

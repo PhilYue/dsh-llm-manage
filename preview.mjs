@@ -167,12 +167,6 @@ if (pickerRoot !== null) {
     pickerContainer.querySelector('.llmm-trigger')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await new Promise(resolve => setTimeout(resolve, 60))
   })
-  const menu = pickerContainer.querySelector('.llmm-menu')
-  if (menu !== null) {
-    menu.style.position = 'static'
-    menu.style.width = '100%'
-    menu.style.maxHeight = 'none'
-  }
 }
 
 const css = Array.from(container.querySelectorAll('style')).map(node => node.textContent ?? '').join('\n')
@@ -203,6 +197,12 @@ const page = `<!doctype html>
   body{margin:0;padding:20px;background:var(--dsw-alias-bg-base);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
   .note{max-width:820px;margin:0 auto 12px;font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.6}
 ${css}
+  /* The live menu is anchored to the trigger and capped to 70vh, scrolling its own
+     body. A static preview lays the whole menu out instead. These must come after
+     the plugin's stylesheet AND use !important: React rewrites the inline style on
+     every render, so setting it from script does not survive. */
+  .llmm-menu{position:static!important;width:100%!important;max-height:none!important}
+  .llmm-menu-body{overflow:visible!important}
 </style></head>
 <body>
   <div class="note">
@@ -222,6 +222,53 @@ ${css}
 </body></html>
 `
 writeFileSync(OUT, page)
+
+// The picker alone, so a README screenshot can show the sections without the whole
+// panel above them. Same markup and same stylesheet as above; only the wrapper and
+// the framing sentence differ.
+const PICKER_OUT = OUT.endsWith('.html')
+  ? `${OUT.slice(0, -'.html'.length)}-picker.html`
+  : `${OUT}-picker.html`
+const pickerPage = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>dsh-llm-manage picker preview</title>
+<style>
+  :root{
+    --dsw-alias-bg-base:#fff;--dsw-alias-bg-layer-1:#f7f8fa;--dsw-alias-bg-layer-2:#fff;
+    --dsw-alias-bg-overlay:#fff;--dsw-alias-border-l1:#e3e5e8;--dsw-alias-border-l2:#c9ccd1;
+    --dsw-alias-brand-primary:#1f6feb;--dsw-alias-label-primary:#1a1d21;
+    --dsw-alias-label-secondary:#6b7280;--dsw-alias-state-error-primary:#c8342f;
+    --dsw-alias-state-idle-primary:#9aa1ab;--dsw-alias-state-success-primary:#1a9d54;
+    --dsw-alias-state-warn-primary:#c98a00;
+  }
+  body{margin:0;padding:20px;background:var(--dsw-alias-bg-base);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+${css}
+  /* The live menu is anchored to the trigger and capped to 70vh, scrolling its own
+     body. A static preview lays the whole menu out instead. These must come after
+     the plugin's stylesheet AND use !important: React rewrites the inline style on
+     every render, so setting it from script does not survive. */
+  .llmm-menu{position:static!important;width:100%!important;max-height:none!important}
+  .llmm-menu-body{overflow:visible!important}
+</style></head>
+<body>
+  <div style="max-width:520px;margin:0 auto">${pickerHtml}</div>
+  <script>
+    // Report the laid-out height so a screenshot can be sized exactly instead of
+    // guessed: too short crops the last section, too tall pads the image.
+    addEventListener('load', function () {
+      document.body.setAttribute('data-height', String(Math.ceil(document.documentElement.scrollHeight)))
+      var menuBody = document.querySelector('.llmm-menu-body')
+      // >0 means the menu is still capped by max-height and the screenshot would
+      // capture it mid-scroll, with later sections missing.
+      document.body.setAttribute('data-menu-overflow',
+        String(menuBody ? menuBody.scrollHeight - menuBody.clientHeight : -1))
+      document.body.setAttribute('data-rows', String(document.querySelectorAll('.llmm-item').length))
+    })
+  </script>
+</body></html>
+`
+writeFileSync(PICKER_OUT, pickerPage)
+
 console.log(`wrote ${OUT}`)
+console.log(`wrote ${PICKER_OUT}`)
 console.log(`rows=${rowCount} rowActionButtons=${actCount} tooltipEl=${tipShown}`)
 console.log(`pickerSections=${pickerSections.join(' | ')}`)
