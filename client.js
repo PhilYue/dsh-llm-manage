@@ -497,6 +497,14 @@ window.__ModuleLoader__.load({
 .llmm-item:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}
 .llmm-item.llmm-active{background:var(--dsw-alias-interactive-bg-hover)}
 .llmm-item.llmm-down{opacity:.55}
+/* The hero row's progress bar is a hairline pinned to the row's bottom edge, so
+   it adds no height to the list: the bar answers "how close is the next level"
+   without making the menu taller than the shipped picker it replaces. */
+.llmm-item{position:relative}
+.llmm-item-bar{position:absolute;left:7px;right:7px;bottom:2px;height:2px;border-radius:1px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-border-l3));overflow:hidden}
+.llmm-item-bar-fill{display:block;height:100%;border-radius:1px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-label-secondary));transition:width .2s ease}
+/* The sort control is a footer, not a row: it stays put while the list scrolls. */
+.llmm-menu-foot{flex:none;margin:3px 0 0;padding:4px 7px 2px;border-top:0.5px solid var(--dsw-alias-border-l3)}
 .llmm-empty{margin:2px 0;padding:12px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:center}
 .llmm-banner{display:flex;align-items:center;gap:8px;padding:6px 10px;border:0.5px solid var(--dsw-alias-state-warn-primary);border-radius:var(--dsw-radius-md);background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}
 .llmm-banner b{font-family:var(--ds-font-family-code);font-weight:500}
@@ -943,6 +951,11 @@ window.__ModuleLoader__.load({
       const [query, setQuery] = useState('')
       const [position, setPosition] = useState(null)
       const [failure, setFailure] = useState('')
+      // Which order the rows inside each section take. Default leaves every
+      // section in the order it was designed around; the two usage orderings are
+      // opt-in, exactly like the panel's, so opening the picker does not
+      // reshuffle a list the user has muscle memory for.
+      const [sortMode, setSortMode] = useState('default')
       const triggerRef = useRef(null)
       const menuRef = useRef(null)
 
@@ -1114,6 +1127,33 @@ window.__ModuleLoader__.load({
        */
       const spansRoutes = (rows) => new Set(rows.map(row => row.route)).size > 1
 
+      /**
+       * Order one section's rows by the active sort.
+       *
+       * Applied per section, not to the catalogue: the sections are rendered
+       * separately, so ordering the catalogue first would be undone by the split.
+       * `default` returns the rows untouched, which keeps both the designed order
+       * and the heat ranking that gives "Most used" its meaning.
+       *
+       * @param {object[]} rows - the section's rows.
+       * @returns {object[]} the same rows in display order.
+       */
+      const orderRows = (rows) => {
+        if (sortMode === 'default') return rows
+        const use = (row) => (row.usage === null || row.usage === undefined ? null : row.usage)
+        return rows.slice().sort((left, right) => {
+          if (sortMode === 'level') {
+            const level = (use(right)?.level ?? 0) - (use(left)?.level ?? 0)
+            if (level !== 0) return level
+          } else {
+            const heat = (use(right)?.heat ?? 0) - (use(left)?.heat ?? 0)
+            if (heat !== 0) return heat
+          }
+          const uses = (use(right)?.uses ?? 0) - (use(left)?.uses ?? 0)
+          return uses !== 0 ? uses : left.model.localeCompare(right.model)
+        })
+      }
+
       const choose = useCallback(async (row) => {
         setFailure('')
         const reuseEffort = current !== null && current.provider === row.route && current.model === row.model
@@ -1148,7 +1188,7 @@ window.__ModuleLoader__.load({
        * rather than drifting to the right edge, so a row reads the same way in both
        * surfaces.
        */
-      const renderItem = (row, showRoute) => {
+      const renderItem = (row, showRoute, hero) => {
         const overlayRow = overlay.get(`${row.route}/${row.model}`)
         const status = overlayRow ? overlayRow.status : 'unknown'
         const down = isProblem(status)
@@ -1161,8 +1201,14 @@ window.__ModuleLoader__.load({
           key: `${row.route}/${row.model}`,
           type: 'button',
           className: `llmm-item${active ? ' llmm-active' : ''}${down ? ' llmm-down' : ''}`,
+          // The same figures the panel's row explains, so a model is described
+          // once and read the same way wherever it appears.
           title: leveled
-            ? `${t('level')} ${usage.level} · ${usage.uses} ${t('usesLabel')} · ${usage.inputTokens + usage.outputTokens} ${t('tokensLabel')} · ${t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`)}`
+            ? `${t('level')} ${usage.level} · ${usage.uses} ${t('usesLabel')}`
+              + (usage.nextAt > 0 ? ` · ${t('level')} ${usage.level + 1} @ ${usage.nextAt}` : '')
+              + ` · ${usage.inputTokens}/${usage.outputTokens} ${t('tokensLabel')}`
+              + (usage.seeded ? ` · ${t('seededNote')}` : '')
+              + ` · ${t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`)}`
             : (overlayRow && overlayRow.reason ? overlayRow.reason : statusLabel(status)),
           onClick: () => { choose(row) },
         },
@@ -1173,13 +1219,31 @@ window.__ModuleLoader__.load({
           // chips, so the menu reads the same way as the panel.
           leveled ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(usage.level, 7)}` },
             `${t('levelShort')}.${usage.level}`) : null,
-          leveled && usage.trend !== 'flat'
-            ? h('span', { className: `llmm-trend llmm-trend-${usage.trend}` }, usage.trend === 'up' ? '↑' : '↓')
+          // The trailing count is what makes the arrow mean something: "busier"
+          // without a number cannot be told apart from one extra request. A model
+          // idle for a week keeps its level but shows no trend, because there is
+          // no recent use to report either way.
+          leveled && usage.recent7 > 0
+            ? h('span', {
+              className: `llmm-trend llmm-trend-${usage.trend}`,
+              title: t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`),
+            }, `${usage.trend === 'up' ? '↑' : usage.trend === 'down' ? '↓' : '→'}${usage.recent7}`)
             : null,
           // The route chip takes the panel's "also on" slot: the same kind of
           // annotation, pushed to the right edge by its own margin.
           showRoute ? h('span', { className: 'llmm-chip llmm-route' }, row.route) : null,
           active ? h('span', { className: 'llmm-chip' }, t('selected')) : null,
+          // The lifted section is where the day-to-day models live, so it is the
+          // one place worth the space of a distance-to-next-level bar: the same
+          // question the panel's hero card answers, on the surface where the
+          // model is actually chosen.
+          hero && leveled
+            ? h('span', { className: 'llmm-item-bar', 'aria-hidden': true },
+              h('span', {
+                className: 'llmm-item-bar-fill',
+                style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` },
+              }))
+            : null,
         )
       }
 
@@ -1188,15 +1252,26 @@ window.__ModuleLoader__.load({
        * @param {string} key - stable React key.
        * @param {string} title - section heading.
        * @param {object[]} rows - the rows.
+       * @param {boolean} [hero] - whether the rows carry progress bars.
        * @returns {object} the section element.
        */
-      const renderSection = (key, title, rows) => h('div', { key },
+      const renderSection = (key, title, rows, hero) => h('div', { key },
         h('div', { className: 'llmm-group' }, `${title} (${rows.length})`),
-        rows.map(row => renderItem(row, spansRoutes(rows))),
+        rows.map(row => renderItem(row, spansRoutes(rows), hero === true)),
       )
 
       const shown = sections.pinned.length + sections.favorites.length + sections.frequent.length
         + sections.groups.reduce((total, group) => total + group.rows.length, 0)
+
+      // Whether any model carries usage at all, which decides whether the sort
+      // control is offered. Counted across the catalogue rather than the visible
+      // sections so the control does not appear and vanish while typing.
+      const usageSeen = catalogue.reduce(
+        (total, group) => total + group.rows.filter(
+          row => row.usage !== null && row.usage !== undefined && row.usage.uses > 0,
+        ).length,
+        0,
+      )
 
       const triggerLabel = current === null
         ? t('pickerTitle')
@@ -1224,20 +1299,37 @@ window.__ModuleLoader__.load({
           // keeps its own section with those rows removed, so a model is never
           // listed twice and the menu still offers the whole catalogue.
           sections.pinned.length > 0
-            ? renderSection('llmm-pinned', t('sectionPinned'), sections.pinned)
+            ? renderSection('llmm-pinned', t('sectionPinned'), orderRows(sections.pinned))
             : null,
           sections.favorites.length > 0
-            ? renderSection('llmm-favorites', t('sectionFavorites'), sections.favorites)
+            ? renderSection('llmm-favorites', t('sectionFavorites'), orderRows(sections.favorites))
             : null,
           // Most used, between the user's explicit choices and the raw catalogue:
-          // earned by use rather than declared by hand.
+          // earned by use rather than declared by hand. This is the section that
+          // gets the progress bars, since it is the one built from usage.
           sections.frequent.length > 0
-            ? renderSection('llmm-frequent', t('sectionFrequent'), sections.frequent)
+            ? renderSection('llmm-frequent', t('sectionFrequent'), orderRows(sections.frequent), true)
             : null,
           sections.groups.map(group => renderSection(
-            group.route, group.name || group.route, group.rows,
+            group.route, group.name || group.route, orderRows(group.rows),
           )),
         ),
+        // The sort control earns its place only once there is usage to sort by;
+        // on a fresh profile it would offer three orderings that all look alike.
+        usageSeen > 0
+          ? h('div', { className: 'llmm-menu-foot' },
+            h('div', { className: 'llmm-sort' },
+              h('span', { className: 'llmm-sort-label' }, t('sortLabel')),
+              ['default', 'level', 'heat'].map(mode => h('button', {
+                key: mode,
+                type: 'button',
+                className: `llmm-sortbtn${sortMode === mode ? ' llmm-sortbtn-on' : ''}`,
+                'aria-pressed': sortMode === mode,
+                onClick: () => setSortMode(mode),
+              }, t(mode === 'default' ? 'sortDefault' : mode === 'level' ? 'sortLevel' : 'sortHeat'))),
+            ),
+          )
+          : null,
         failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,
       )
 

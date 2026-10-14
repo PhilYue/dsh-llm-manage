@@ -20,6 +20,7 @@ one flat list. Five things then go wrong at once, and none of them is the gatewa
 | Pain | What this plugin does |
 |---|---|
 | A long list, favorites buried | Pin and favorite models; the picker lifts them into their own sections at the top, and the panel sorts pinned → favorite → recent → rest |
+| No sense of which models you actually rely on | A local ledger levels each model by how often you use it and ranks the rest by 14-day heat, shown as a **Most used** card in the panel and a ranked section in the picker |
 | Retired models still listed; selecting one errors | Reconciles the route's `models:` list against the gateway's own `GET {baseURL}/models` directory and flags anything missing as retired |
 | Quota exhausted, manual switching | Watches `agent/request-error`, switches to the next usable model on a model-scoped quota failure, and shows a banner naming the model it moved for |
 | The same model served by several providers | Marks each row with how many other routes also serve it, instead of hiding the copies |
@@ -329,10 +330,27 @@ too — but it is still *selectable*. The plugin's view of a model can be stale,
 model from the picker is the one thing this design refuses to do silently. Search filters
 across the lifted sections as well as the route groups.
 
-A model that has been used carries a proficiency chip beside its name (`Lv.3`) and a small
-trend arrow when this week differs from last. A model that has never been used carries no
-chip at all: a wall of `Lv.1` badges on an untouched catalogue would be noise rather than
-information, so the chip itself is the signal that there is history behind a row.
+A model that has been used carries a proficiency chip beside its name (`Lv.3`) and, when
+this week differs from last, a trend arrow **with the 7-day count attached** (`↑12`, `↓4`).
+The count is the part that carries the meaning: an arrow alone cannot be told apart from one
+extra request. A model that has been used carries no trend at all once it has been idle for a
+week — there is no recent use to report, and a flat arrow would invent one. A model that has
+never been used carries no chip at all: a wall of `Lv.1` badges on an untouched catalogue
+would be noise rather than information, so the chip itself is the signal that there is
+history behind a row.
+
+**Most used** carries a distance-to-next-level bar under each row, because it is the one
+section built entirely from usage and the one where the models you are actually choosing
+between live. The bar is a hairline on the row's bottom edge, so it costs the list no height.
+Each row's tooltip spells the whole figure out — level, uses, the count that reaches the next
+level, tokens in/out, and whether the number came from the history scan.
+
+Once any model has usage, a **Sort** control at the foot of the card orders the rows inside
+every section: the default designed order, **By proficiency**, or **By recent use**. It sits
+outside the scrolling list so it stays reachable, and it exists only when there is usage to
+sort by — on a fresh profile it would offer three orderings that all look alike. The two
+usage orderings answer different questions, and on a real profile they disagree: the model
+you have used most is often not the one you are reaching for today.
 
 The picker is styled from the panel's own vocabulary rather than as a separate design: the
 same row box (padding, radius, hover background **and** hover border), the same dimming for
@@ -370,9 +388,9 @@ Both numbers come from a local ledger, and the distinction between them is the p
 
 - **Level** is earned from the lifetime count and never decreases. It answers "how much have
   I used this model", which is why it does not fall when you spend a week elsewhere.
-- **Heat** decays with a 14-day half-life, so it answers "what am I reaching for now". The
-  **Most used** sections rank by heat, not by the lifetime total, so the oldest model does
-  not win forever.
+- **Heat** decays with a 14-day half-life, so it answers "what am I reaching for now". Both
+  **Most used** sections — the panel's card and the picker's — rank by heat by default, not by
+  the lifetime total, so the oldest model does not win forever.
 
 The level steps are 0, 10, 30, 80, 200, 500 and 1200 uses, giving levels 1–7. Tokens are
 recorded and displayed but deliberately do not score: a handful of enormous requests should
@@ -389,6 +407,21 @@ choices keep the numbers honest:
   ledger does not hook the streaming event: that one wraps every call, including retries and
   replays.)
 - A replayed session event is deduplicated, so resuming a session does not double count it.
+
+The ledger starts empty, but your history does not. On startup the plugin folds the session
+logs already on disk into the counters, so a model you have been using for months starts at
+its real level instead of level 1. This runs in the background and is bounded: it scans for up
+to 20 seconds, yields, and resumes on the next pass, because replaying a large corpus is
+disk-heavy and must not compete with the live session you are in. Each session it has already
+counted is marked, so resuming never double counts.
+
+When it finds an empty or partial ledger, the panel says where the pass stands — waiting for
+the session service, reading your logs, how many responses it counted from how many sessions,
+or why it stopped. It says so on failure too, deliberately: an earlier version sampled the
+session service once at startup, and on a host whose service registered a moment later it
+answered "service not available" and wrote nothing. That empty ledger was indistinguishable
+from a correct one, and the feature looked dead while reporting nothing at all. **Scan
+history** at the bottom of the panel starts a pass on demand.
 
 Because the counters are local and describe your own habits, deleting them does not require
 hunting for a file: **Clear usage** at the bottom of the panel, or the `reset-usage` tool

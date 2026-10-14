@@ -631,6 +631,66 @@ check('an untouched model carries no proficiency chip',
   Array.from(pickerMenu().querySelectorAll('.llmm-item')).filter(item => item.querySelector('.llmm-lv') === null).length > 0,
   'every row is chipped, so the chip says nothing')
 
+// ── the picker's trend column ───────────────────────────────────────────────
+// The arrow alone cannot be told apart from one extra request, so the trailing
+// count is the part that carries the meaning. A model idle for a month must show
+// nothing rather than a flat arrow: there is no recent use to report.
+const pickerItem = (name) => Array.from(pickerMenu().querySelectorAll('.llmm-item'))
+  .find(item => item.querySelector('.llmm-name')?.textContent === name)
+const trendText = (name) => pickerItem(name)?.querySelector('.llmm-trend')?.textContent ?? ''
+check('a recently used model shows its 7-day count beside the trend arrow',
+  trendText(RECENT) === '↑4', `rendered "${trendText(RECENT)}"`)
+check('a model idle for a month shows no trend rather than a flat arrow',
+  trendText(VETERAN) === '', `rendered "${trendText(VETERAN)}"`)
+
+// ── the lifted section carries the distance-to-next-level bar ───────────────
+const liftedSection = () => {
+  const body = pickerMenuQuery('.llmm-menu-body')
+  if (body === null) return null
+  return Array.from(body.children).find(
+    section => /^(Most used|常用)$/.test((section.querySelector('.llmm-group')?.textContent ?? '').split(' (')[0]),
+  ) ?? null
+}
+check('the lifted section shows distance to the next level as a bar',
+  (liftedSection()?.querySelector('.llmm-item-bar-fill')?.getAttribute('style') ?? '').includes('width:'),
+  liftedSection()?.querySelector('.llmm-item-bar-fill')?.getAttribute('style') ?? 'no bar in the lifted section')
+const barInRouteGroups = Array.from(pickerMenuQuery('.llmm-menu-body')?.children ?? [])
+  .filter(section => !/^(Most used|常用)$/.test((section.querySelector('.llmm-group')?.textContent ?? '').split(' (')[0]))
+  .filter(section => section.querySelector('.llmm-item-bar') !== null)
+check('a route group does not carry the bar', barInRouteGroups.length === 0,
+  barInRouteGroups.length === 0
+    ? `${Array.from(pickerMenuQuery('.llmm-menu-body')?.children ?? []).length} section(s) checked`
+    : `the bar leaked into ${barInRouteGroups.length} route group(s)`)
+
+// ── the picker's own sort control ───────────────────────────────────────────
+// It answers the same two questions the panel's does, and the two orderings must
+// DISAGREE: VETERAN has more uses but RECENT has more heat, so a control wired to
+// the wrong field, or to nothing at all, cannot pass both.
+const pickerSortButtons = () => Array.from(
+  pickerMenuQuery('.llmm-menu-foot')?.querySelectorAll('.llmm-sortbtn') ?? [],
+)
+check('the picker offers a sort control once models have been used',
+  pickerSortButtons().length === 3, `${pickerSortButtons().length} button(s)`)
+const liftedNames = () => Array.from(liftedSection()?.querySelectorAll('.llmm-name') ?? [])
+  .map(node => node.textContent)
+check('by default the lifted section follows recent heat',
+  liftedNames()[0] === RECENT, liftedNames().join(' / '))
+const pickerSortBy = async (index) => {
+  await act(async () => {
+    pickerSortButtons()[index].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => pickerSortButtons()[index].getAttribute('aria-pressed') === 'true')
+  })
+}
+await pickerSortBy(1)
+check('sorting the picker by proficiency puts the higher level first',
+  liftedNames()[0] === VETERAN, liftedNames().join(' / '))
+await pickerSortBy(2)
+check('sorting the picker by recent use puts the hotter model first',
+  liftedNames()[0] === RECENT, liftedNames().join(' / '))
+await pickerSortBy(0)
+check('returning the picker to its default order restores the designed ranking',
+  liftedNames()[0] === RECENT, liftedNames().join(' / '))
+
 // The regression that matters most: lifting rows into sections must not list them
 // twice. A model in both lists is offered under Pinned only, because a pin
 // outranks a favorite in the Host's own ranking.
