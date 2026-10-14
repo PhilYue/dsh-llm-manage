@@ -90,11 +90,21 @@ const settingsService = {
     user: SETTINGS,
   }],
 }
+/**
+ * The historical-scan fixture behind `ctx.get('sessionQuery')`.
+ *
+ * `seedUsage()` resolves this service when it runs, so the suite can start it
+ * empty — the automatic pass at `apply()` then finds nothing and cannot perturb
+ * the counts under test — and fill it in later to drive the backfill explicitly.
+ * @type {{ listSessions: () => Promise<object[]>, readSession: (id: string) => Promise<object> }}
+ */
+let sessionQueryFixture = { listSessions: async () => [], readSession: async () => ({ events: [] }) }
 const hostGet = (k) => {
   if (k === 'connection') return connection
   if (k === 'settings') return settingsService
   if (k === 'credentials') return { resolve: async () => ({ value: API_KEY, source: 'test' }) }
   if (k === 'llm') return llmService
+  if (k === 'sessionQuery') return sessionQueryFixture
   return undefined
 }
 const llmService = {
@@ -405,8 +415,136 @@ check('passively learned health survived the race',
 check('pre-race overlay kept every list',
   beforeRace.pins.length === 1 && beforeRace.favorites.length === 1 && beforeRace.hidden.length === 1)
 
+// ── the proficiency ledger ──────────────────────────────────────────────────
+// Which models the user actually works with, counted from committed assistant
+// messages rather than from clicks on the menu. The shape below is the real one
+// the session service emits: `(session, event)` after the durable append.
+//
+// The distinction that matters is `assistant/message` versus `assistant/attempt`.
+// A retried request produces the latter, and a counting scheme that ignored the
+// difference would multiply a flaky gateway's retries into fake proficiency —
+// which is exactly why `llm/stream` is not the source: its contract wraps every
+// call including retries.
+const NOW = Date.now()
+const DAY = 86400000
+const emit = (name, ...args) => { for (const cb of listeners[name] ?? []) cb(...args) }
+const assistantMessage = (seq, model, time, usage) => ({
+  type: 'assistant/message',
+  seq,
+  time,
+  data: {
+    turn: 1,
+    step: 1,
+    message: { role: 'assistant', source: { kind: 'model', provider: ROUTE, model } },
+    stream: [],
+    usage,
+  },
+})
+const SESSION = { id: 'sess-usage' }
+emit('session/event', SESSION, assistantMessage(1, at(0), NOW - 2 * DAY, { inputTokens: 100, outputTokens: 20 }))
+emit('session/event', SESSION, assistantMessage(2, at(0), NOW - 1000, { inputTokens: 50, outputTokens: 10 }))
+// A resumed session replays its own tail, so the same seq arrives twice.
+emit('session/event', SESSION, assistantMessage(2, at(0), NOW - 1000, { inputTokens: 50, outputTokens: 10 }))
+emit('session/event', SESSION, assistantMessage(3, at(1), NOW - DAY, { inputTokens: 7, outputTokens: 3 }))
+// A retry is an attempt, not a use.
+emit('session/event', SESSION, { type: 'assistant/attempt', seq: 4, time: NOW, data: { turn: 1, step: 1, stream: [] } })
+// A malformed event must be ignored rather than crash the listener.
+emit('session/event', SESSION, { type: 'assistant/message', seq: 5, time: NOW, data: {} })
+
+const usageOut = JSON.parse(await def.execute({ action: 'usage' }))
+const usageRow = (model) => usageOut.models.find(entry => entry.model === model)
+check('a committed assistant message counts as one use',
+  usageRow(at(0))?.uses === 2, `uses=${usageRow(at(0))?.uses}`)
+check('a replayed session seq does not double count',
+  usageRow(at(0))?.uses === 2 && usageRow(at(1))?.uses === 1,
+  `${at(0)}=${usageRow(at(0))?.uses} ${at(1)}=${usageRow(at(1))?.uses}`)
+check('a retried request is not counted as a use', usageRow(at(1))?.uses === 1)
+check('an event with no model is ignored',
+  usageOut.totals.uses === 3 && usageOut.models.every(entry => typeof entry.model === 'string' && entry.model !== ''),
+  `uses=${usageOut.totals.uses} models=${usageOut.models.length}`)
+check('token usage is recorded alongside the count',
+  usageRow(at(0))?.inputTokens === 150 && usageRow(at(0))?.outputTokens === 30,
+  `in=${usageRow(at(0))?.inputTokens} out=${usageRow(at(0))?.outputTokens}`)
+check('proficiency level rises with the lifetime count',
+  usageRow(at(0))?.level === 1 && usageRow(at(0))?.nextAt === 10,
+  `level=${usageRow(at(0))?.level} nextAt=${usageRow(at(0))?.nextAt}`)
+check('the more recently used model ranks first', usageOut.models[0]?.model === at(0),
+  `first=${usageOut.models[0]?.model}`)
+check('the ledger totals span the profile',
+  usageOut.totals.uses === 3 && usageOut.totals.inputTokens === 157,
+  `uses=${usageOut.totals.uses} in=${usageOut.totals.inputTokens}`)
+
+// A failed call is not a use — it must not inflate proficiency — but it is the
+// one honest "attempts" signal the host offers. The earlier failure cases in
+// this suite already went through the same listener, so the expectation is a
+// delta of exactly one rather than an absolute number: an absolute number would
+// silently pass for the wrong reason if the listener stopped recording entirely.
+const beforeFail = JSON.parse(await def.execute({ action: 'usage' }))
+const attemptsBefore = beforeFail.models.find(entry => entry.model === at(2))?.attempts ?? 0
+const failAgent = { id: 'sess-usage-fail', session: { id: 'sess-usage-fail' } }
+for (const l of listeners['agent/request'] ?? []) {
+  await l.call({}, { agent: failAgent, turn: 1, step: 1, signal: new AbortController().signal },
+    () => Promise.resolve({ provider: ROUTE, model: at(2) }))
+}
+for (const l of listeners['agent/request-error'] ?? []) {
+  await l.call({}, {
+    agent: failAgent,
+    turn: 1,
+    step: 1,
+    provider: ROUTE,
+    // Account-wide rate limiting is not switchable, so the listener records and
+    // defers instead of running the fallback chain.
+    failure: { code: 'RATE_LIMIT', message: 'slow down' },
+    retryPolicy: undefined,
+    signal: new AbortController().signal,
+  }, () => Promise.resolve({ kind: 'retry' }))
+}
+const afterFail = JSON.parse(await def.execute({ action: 'usage' }))
+const failRow = afterFail.models.find(entry => entry.model === at(2))
+check('a failed call is recorded as an attempt, never as a use',
+  failRow?.attempts === attemptsBefore + 1 && failRow?.uses === 0,
+  `attempts=${attemptsBefore}→${failRow?.attempts} uses=${failRow?.uses}`)
+
+const persisted = JSON.parse(readFileSync(storeFile, 'utf8'))
+check('the ledger is persisted to disk, not only in memory', persisted.usage?.[at(0)]?.uses === 2,
+  `stored=${persisted.usage?.[at(0)]?.uses}`)
+
+// ── historical backfill ─────────────────────────────────────────────────────
+// A fresh install must not report level 1 on every model while the user's own
+// logs say otherwise, so existing session logs are scanned once. The watermark
+// makes a second pass a no-op instead of a double count.
+sessionQueryFixture = {
+  listSessions: async () => [{ header: { id: 'sess-hist' } }],
+  readSession: async () => ({
+    header: { id: 'sess-hist' },
+    events: [
+      assistantMessage(1, at(3), NOW - 3 * DAY, { inputTokens: 5, outputTokens: 1 }),
+      assistantMessage(2, at(3), NOW - 3 * DAY, { inputTokens: 5, outputTokens: 1 }),
+      // A backfilled session may itself contain a replayed seq.
+      assistantMessage(2, at(3), NOW - 3 * DAY, { inputTokens: 5, outputTokens: 1 }),
+    ],
+  }),
+}
+const seeded = JSON.parse(await def.execute({ action: 'seed-usage' }))
+check('the backfill counts existing session logs', seeded.ok === true && seeded.counted === 2,
+  `ok=${seeded.ok} counted=${seeded.counted} reason=${seeded.reason ?? ''}`)
+const afterSeed = JSON.parse(await def.execute({ action: 'usage' }))
+check('a backfilled model appears with its whole history',
+  afterSeed.models.find(entry => entry.model === at(3))?.uses === 2,
+  `uses=${afterSeed.models.find(entry => entry.model === at(3))?.uses}`)
+check('a backfilled model is marked as seeded',
+  afterSeed.models.find(entry => entry.model === at(3))?.seeded === true)
+const seededAgain = JSON.parse(await def.execute({ action: 'seed-usage' }))
+const afterSeed2 = JSON.parse(await def.execute({ action: 'usage' }))
+check('the backfill resumes from its watermark instead of recounting',
+  seededAgain.counted === 0 && afterSeed2.models.find(entry => entry.model === at(3))?.uses === 2,
+  `second pass counted=${seededAgain.counted}`)
+
 // ── restart durability: a fresh apply() must read the same overlay ──────────
-writeFileSync(storeFile, JSON.stringify({ ...raced, pins: [{ route: ROUTE, model: at(0) }] }))
+// The usage counters ride in the same document as the pins, so this also proves
+// proficiency survives a restart rather than resetting to zero.
+const beforeRestart = JSON.parse(readFileSync(storeFile, 'utf8'))
+writeFileSync(storeFile, JSON.stringify({ ...beforeRestart, pins: [{ route: ROUTE, model: at(0) }] }))
 routes = []
 plugin.apply({
   inject: (_names, cb) => cb({
@@ -429,6 +567,35 @@ const rows2 = snap2?.value?.groups?.[0]?.rows ?? []
 check('overlay survives a fresh apply() (survives restart)',
   rows2.some(r => r.model === at(0) && r.pinned === true),
   `pinned now: ${rows2.filter(r => r.pinned).map(r => r.model).join(',')}`)
+check('proficiency survives a fresh apply()',
+  rows2.find(r => r.model === at(0))?.usage?.uses === 2,
+  `uses now: ${rows2.find(r => r.model === at(0))?.usage?.uses}`)
+
+// The restart's own HTTP route is used from here on, because the second apply()
+// registers no tool definition.
+const call2 = async (body) => {
+  const r = await routes.find(route => route.path === '/api/llm-manage').fetch(new Request('http://x/api/llm-manage', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }))
+  return { status: r.status, body: await r.json() }
+}
+
+// Deleting the counters is a privacy affordance, so it must be reachable from
+// the panel and must actually clear what it says it cleared.
+const cleared = await call2({ action: 'reset-usage', route: ROUTE, model: at(0) })
+check('reset-usage clears one model and returns the new snapshot',
+  cleared.body?.value?.cleared?.includes(`${ROUTE}/${at(0)}`)
+  && (cleared.body?.snapshot?.groups?.[0]?.rows ?? []).find(r => r.model === at(0))?.usage?.uses === 0,
+  `cleared=${JSON.stringify(cleared.body?.value?.cleared)}`)
+const stillThere = await call2({ action: 'usage' })
+check('reset-usage leaves other models alone',
+  stillThere.body?.value?.models?.some(entry => entry.model === at(1)),
+  `models=${stillThere.body?.value?.models?.map(entry => entry.model).join(',')}`)
+const clearedAll = await call2({ action: 'reset-usage' })
+check('reset-usage with no route clears every counter',
+  clearedAll.body?.value?.ok === true
+  && (await call2({ action: 'usage' })).body?.value?.models?.length === 0,
+  `cleared=${clearedAll.body?.value?.cleared?.length ?? 0} route(s)`)
 
 rmSync(HOME, { recursive: true, force: true })
 const failed = results.filter(r => !r.passed)

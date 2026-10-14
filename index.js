@@ -24,7 +24,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
@@ -39,6 +39,48 @@ const RECENT_LIMIT = 40
 
 /** Upper bound on retained health rows so one huge catalog cannot grow the file without end. */
 const HEALTH_LIMIT = 4000
+
+/**
+ * Upper bound on retained per-model usage rows inside one route file. Usage is
+ * keyed by model, so a huge catalog could otherwise grow the file without end.
+ */
+const USAGE_LIMIT = 300
+
+/**
+ * Per-day buckets retained per model. Only the recent window is needed: heat
+ * decays with a 14-day half-life, so a bucket older than this contributes
+ * nothing a user could act on, while its total is already folded into `uses`.
+ */
+const USAGE_DAY_WINDOW = 30
+
+/**
+ * Half-life of the heat score, in days. A use 14 days old counts half as much as
+ * one from today, which is what makes the ordering track current habits instead
+ * of a lifetime total.
+ */
+const HEAT_HALF_LIFE_DAYS = 14
+
+/**
+ * Cumulative model round-trips required for each proficiency level, index 0
+ * being level 1. A level is a trophy: it is derived from the lifetime total and
+ * therefore never decreases, while ordering uses the decaying heat score. That
+ * split is deliberate — one number cannot be both a stable achievement and a
+ * current-habit signal.
+ */
+const LEVEL_STEPS = [0, 10, 30, 80, 200, 500, 1200]
+
+/**
+ * How long usage deltas accumulate in memory before one durable write. A model
+ * step must never pay for a disk write, and a long tool call can produce many
+ * steps in a row.
+ */
+const USAGE_FLUSH_MS = 5000
+
+/** Most sessions one backfill pass will read, newest first. */
+const SEED_SESSION_LIMIT = 300
+
+/** Upper bound on remembered backfilled session ids, so the watermark cannot grow forever. */
+const SEED_MARK_LIMIT = 2000
 
 /** How long a model marked quota-exhausted is skipped by the fallback chain. */
 const QUOTA_COOLDOWN_MS = 30 * 60 * 1000
@@ -183,6 +225,109 @@ function cleanString(value) {
 }
 
 /**
+ * Local calendar day of an instant, as `YYYY-MM-DD`.
+ *
+ * Days are bucketed by the user's own calendar day rather than by a UTC or
+ * 24-hour window: "I used it today" has to mean the day the user is living in,
+ * or the heat score would disagree with the panel's own timestamps near midnight.
+ * @param {number} at - epoch milliseconds.
+ * @returns {string} the day key.
+ */
+function dayKeyOf(at) {
+  const date = new Date(at)
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+/**
+ * Whole-day index of a `YYYY-MM-DD` key, so two keys can be subtracted.
+ * @param {string} key - day key.
+ * @returns {number} days since the epoch.
+ */
+function dayIndexOf(key) {
+  const parts = key.split('-')
+  return Math.floor(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])) / 86400000)
+}
+
+/**
+ * Sum one model's usage over a 7-day window ending `offsetDays` ago.
+ * @param {Record<string, number>} days - per-day buckets.
+ * @param {number} today - today's day index.
+ * @param {number} offsetDays - 0 for the last 7 days, 7 for the 7 before that.
+ * @returns {number} the summed count.
+ */
+function windowCount(days, today, offsetDays) {
+  let total = 0
+  for (const [key, count] of Object.entries(days)) {
+    const age = today - dayIndexOf(key)
+    if (age >= offsetDays && age < offsetDays + 7) total += count
+  }
+  return total
+}
+
+/**
+ * The decaying heat score: recent use counts most, and nothing has to be
+ * re-scheduled because the decay is applied when the value is read.
+ * @param {Record<string, number>} days - per-day buckets.
+ * @param {number} today - today's day index.
+ * @returns {number} the score.
+ */
+function heatOf(days, today) {
+  let score = 0
+  for (const [key, count] of Object.entries(days)) {
+    const age = today - dayIndexOf(key)
+    // A bucket dated in the future only appears when the clock moved backwards;
+    // counting it would let one bad timestamp dominate the ordering.
+    if (age < 0 || age > 3650) continue
+    score += count * Math.pow(0.5, age / HEAT_HALF_LIFE_DAYS)
+  }
+  return score
+}
+
+/**
+ * Fold one model's stored counters into what the UI renders.
+ *
+ * Everything the panel shows is derived here rather than in the browser half, so
+ * the picker, the panel and the tool cannot disagree about what "level 4" means.
+ * @param {object} entry - stored usage counters.
+ * @param {number} now - current epoch milliseconds.
+ * @returns {object} the derived view.
+ */
+function usageView(entry, now) {
+  const days = entry?.days ?? {}
+  const uses = entry?.uses ?? 0
+  const today = dayIndexOf(dayKeyOf(now))
+  let level = 1
+  for (let index = 0; index < LEVEL_STEPS.length; index += 1) {
+    if (uses >= LEVEL_STEPS[index]) level = index + 1
+  }
+  const floor = LEVEL_STEPS[level - 1]
+  const ceiling = LEVEL_STEPS[level]
+  const recent7 = windowCount(days, today, 0)
+  const prior7 = windowCount(days, today, 7)
+  return {
+    uses,
+    attempts: entry?.attempts ?? 0,
+    inputTokens: entry?.in ?? 0,
+    outputTokens: entry?.out ?? 0,
+    firstAt: entry?.firstAt ?? 0,
+    lastAt: entry?.lastAt ?? 0,
+    level,
+    /** Round-trips needed for the next level, or 0 when the model is maxed. */
+    nextAt: ceiling ?? 0,
+    /** Share of the way to the next level, 0..1; 1 when maxed. */
+    progress: ceiling === undefined ? 1 : (uses - floor) / (ceiling - floor),
+    heat: Number(heatOf(days, today).toFixed(3)),
+    recent7,
+    prior7,
+    /** `up` when the last 7 days beat the 7 before, `down`, or `flat`. */
+    trend: recent7 > prior7 ? 'up' : recent7 < prior7 ? 'down' : 'flat',
+    seeded: (entry?.seededAt ?? 0) > 0,
+  }
+}
+
+/**
  * Normalize the row's config into the shape the rest of the plugin uses.
  * Every field is optional, so an empty or partial row stays valid.
  * @param {Record<string, unknown> | undefined} raw - the Loader row's config.
@@ -194,6 +339,7 @@ function resolveConfig(raw) {
   const probe = config.probe !== null && typeof config.probe === 'object' ? config.probe : {}
   const directory = config.directory !== null && typeof config.directory === 'object' ? config.directory : {}
   const fallback = config.fallback !== null && typeof config.fallback === 'object' ? config.fallback : {}
+  const usage = config.usage !== null && typeof config.usage === 'object' ? config.usage : {}
   const chain = Array.isArray(fallback.chain)
     ? fallback.chain.map(entry => cleanString(entry)).filter(entry => entry !== undefined)
     : []
@@ -206,6 +352,13 @@ function resolveConfig(raw) {
     },
     directory: { ttlMs: nonNegativeInt(directory.ttlMs, 30 * 60 * 1000) },
     fallback: { enabled: fallback.enabled !== false, chain },
+    usage: {
+      /** Count real model round-trips into the per-model proficiency ledger. */
+      enabled: usage.enabled !== false,
+      /** Scan existing session logs once, so a fresh install is not level 1 everywhere. */
+      seed: usage.seed !== false,
+      flushMs: positiveInt(usage.flushMs, USAGE_FLUSH_MS),
+    },
   }
 }
 
@@ -288,6 +441,39 @@ class OverlayStore {
   }
 
   /**
+   * Every route with an overlay document on disk.
+   *
+   * The ledger is aggregated across routes, and a route whose models are all
+   * unavailable is exactly the case a live catalog cannot enumerate — so the
+   * directory itself is the source, not the current provider list.
+   *
+   * The stamped `route` wins over the file name because the name is sanitized:
+   * reading it back as an id would invent a route that does not exist.
+   * @returns {Promise<string[]>} route ids.
+   */
+  async routes() {
+    let names
+    try {
+      names = await readdir(this.dir)
+    } catch {
+      return []
+    }
+    const found = []
+    for (const name of names) {
+      if (!name.endsWith('.json') || name.startsWith('__')) continue
+      const base = name.slice(0, -'.json'.length)
+      try {
+        const parsed = JSON.parse(await readFile(this.fileFor(base), 'utf8'))
+        found.push(cleanString(parsed?.route) ?? base)
+      } catch {
+        // An unreadable document still names a route the user configured.
+        found.push(base)
+      }
+    }
+    return found.sort()
+  }
+
+  /**
    * Apply a mutation to one route's overlay and persist it atomically.
    *
    * Mutations for one route run strictly one after another, so a concurrent
@@ -318,6 +504,7 @@ class OverlayStore {
     const current = await this.read(route)
     const next = normalizeOverlay(mutate(structuredClone(current)))
     next.revision = (current.revision ?? 0) + 1
+    next.route = route
     this.cache.set(route, next)
     const file = this.fileFor(route)
     const temp = `${file}.${randomUUID()}.tmp`
@@ -333,11 +520,89 @@ class OverlayStore {
  * @returns {object} an empty overlay.
  */
 function emptyOverlay() {
-  return { version: STORE_VERSION, revision: 0, favorites: [], pins: [], hidden: [], recent: [], health: {} }
+  return {
+    version: STORE_VERSION,
+    revision: 0,
+    favorites: [],
+    pins: [],
+    hidden: [],
+    recent: [],
+    health: {},
+    usage: {},
+    seeded: {},
+  }
 }
 
 /**
- * Coerce a stored overlay into the current shape, dropping anything unusable.
+ * Keep only the newest per-day buckets.
+ *
+ * `YYYY-MM-DD` sorts lexicographically, so the window is a string sort rather
+ * than a date parse. Dropping a bucket never loses the lifetime total: `uses`
+ * holds that separately.
+ * @param {Record<string, number>} days - per-day buckets.
+ * @returns {Record<string, number>} the pruned buckets.
+ */
+function pruneDays(days) {
+  const keys = Object.keys(days)
+  if (keys.length <= USAGE_DAY_WINDOW) return days
+  const kept = {}
+  for (const key of keys.sort().slice(keys.length - USAGE_DAY_WINDOW)) kept[key] = days[key]
+  return kept
+}
+
+/**
+ * Keep the most-used models and drop the tail, so one enormous catalog cannot
+ * grow a route file without end.
+ * @param {Record<string, object>} usage - counters keyed by model id.
+ * @returns {Record<string, object>} the pruned counters.
+ */
+function pruneUsage(usage) {
+  const keys = Object.keys(usage)
+  if (keys.length <= USAGE_LIMIT) return usage
+  const kept = {}
+  for (const key of keys.sort((left, right) => (usage[right].uses ?? 0) - (usage[left].uses ?? 0)).slice(0, USAGE_LIMIT)) {
+    kept[key] = usage[key]
+  }
+  return kept
+}
+
+/**
+ * Coerce stored usage counters into the current shape.
+ *
+ * Only numbers survive: a hand-edited or half-written file must never be able to
+ * inject a string into a counter that later arithmetic would turn into `NaN`.
+ * @param {unknown} raw - the stored `usage` value.
+ * @returns {Record<string, object>} usable counters keyed by model id.
+ */
+function normalizeUsage(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const usage = {}
+  for (const [model, value] of Object.entries(raw)) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) continue
+    const days = {}
+    if (value.days !== null && typeof value.days === 'object' && !Array.isArray(value.days)) {
+      for (const [key, count] of Object.entries(value.days)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(key)) continue
+        if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) continue
+        days[key] = Math.floor(count)
+      }
+    }
+    usage[model] = {
+      uses: nonNegativeInt(value.uses, 0),
+      attempts: nonNegativeInt(value.attempts, 0),
+      in: nonNegativeInt(value.in, 0),
+      out: nonNegativeInt(value.out, 0),
+      firstAt: nonNegativeInt(value.firstAt, 0),
+      lastAt: nonNegativeInt(value.lastAt, 0),
+      seededAt: nonNegativeInt(value.seededAt, 0),
+      days: pruneDays(days),
+    }
+  }
+  return usage
+}
+
+/**
+ * The one persisted shape of one route's overlay.
  * @param {object} raw - parsed document.
  * @returns {object} a valid overlay.
  */
@@ -362,9 +627,23 @@ function normalizeOverlay(raw) {
       }
     }
   }
+  // Backfilled session ids. They live in the overlay so the watermark survives a
+  // restart: without it, every start would re-scan the same logs and count them
+  // a second time.
+  const seeded = {}
+  if (raw.seeded !== null && typeof raw.seeded === 'object' && !Array.isArray(raw.seeded)) {
+    const entries = Object.entries(raw.seeded)
+      .filter(([, at]) => typeof at === 'number' && Number.isFinite(at))
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, SEED_MARK_LIMIT)
+    for (const [id, at] of entries) seeded[id] = at
+  }
   return {
     version: STORE_VERSION,
     revision: typeof raw.revision === 'number' ? raw.revision : 0,
+    // The file name is sanitized, so it cannot always be turned back into the
+    // route id. Stamping the id keeps the document self-describing.
+    route: cleanString(raw.route),
     favorites: refs(raw.favorites),
     pins: refs(raw.pins),
     hidden: refs(raw.hidden),
@@ -377,6 +656,8 @@ function normalizeOverlay(raw) {
         .slice(0, RECENT_LIMIT)
       : [],
     health,
+    usage: normalizeUsage(raw.usage),
+    seeded,
   }
 }
 
@@ -415,7 +696,7 @@ export function apply(ctx, rawConfig) {
   /** Routes whose gateway directory was fetched, and when. */
   const directoryCache = new Map()
   /** Diagnostics counters, surfaced through the tool so the user can see real behaviour. */
-  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, refusals: [], bySession: {} }
+  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, refusals: [], bySession: {}, usageCounted: 0, usageSeed: undefined }
 
   /**
    * Record one health verdict for a model.
@@ -453,6 +734,326 @@ export function apply(ctx, rawConfig) {
         ...overlay.recent.filter(entry => !(entry.route === route && entry.model === model)),
       ].slice(0, RECENT_LIMIT),
     }))
+  }
+
+  // ── Proficiency ledger ─────────────────────────────────────────────────────
+  //
+  // Which models the user actually works with, counted from committed model
+  // round-trips rather than from clicks on a menu. The evidence is the session
+  // log: `assistant/message` carries `message.source.{provider,model}` and that
+  // call's `usage`, and it is appended exactly once per committed response, so a
+  // retried request cannot inflate the count. `llm/stream` is deliberately NOT
+  // used — its own contract says it wraps every call including retries, so one
+  // request would count two or three times.
+
+  /** The overlay document holding the backfill watermark; not a route. */
+  const SEED_DOC = '__usage__'
+
+  /** Pending per-route deltas, already in the stored counter shape. @type {Map<string, Map<string, object>>} */
+  let usagePending = new Map()
+  /** Pending flush timer, or undefined when nothing is waiting. */
+  let usageTimer
+  /** Serializes flushes so two batches cannot interleave one read-modify-write. */
+  let usageChain = Promise.resolve()
+  /**
+   * `sessionId:seq` of every already-counted event. A resumed session can replay
+   * its own tail, and the backfill scans logs the live subscriber may also see.
+   * @type {Set<string>}
+   */
+  const countedUsage = new Set()
+
+  /** A zeroed counter in the stored shape. */
+  function blankUsage() {
+    return { uses: 0, attempts: 0, in: 0, out: 0, firstAt: 0, lastAt: 0, seededAt: 0, days: {} }
+  }
+
+  /**
+   * Add one increment to a counter.
+   *
+   * Both the pending and the stored counters use this shape, so one function
+   * serves accumulation, persistence and the retry-after-failure path.
+   * @param {object} current - counter to add to.
+   * @param {object} incoming - counter to add.
+   * @returns {object} the merged counter.
+   */
+  function mergeUsage(current, incoming) {
+    const days = { ...(current.days ?? {}) }
+    for (const [day, count] of Object.entries(incoming.days ?? {})) days[day] = (days[day] ?? 0) + count
+    return {
+      uses: (current.uses ?? 0) + (incoming.uses ?? 0),
+      attempts: (current.attempts ?? 0) + (incoming.attempts ?? 0),
+      in: (current.in ?? 0) + (incoming.in ?? 0),
+      out: (current.out ?? 0) + (incoming.out ?? 0),
+      firstAt: (current.firstAt ?? 0) === 0
+        ? (incoming.firstAt ?? 0)
+        : ((incoming.firstAt ?? 0) === 0 ? current.firstAt : Math.min(current.firstAt, incoming.firstAt)),
+      lastAt: Math.max(current.lastAt ?? 0, incoming.lastAt ?? 0),
+      seededAt: (incoming.seededAt ?? 0) > 0 ? ((current.seededAt ?? 0) || incoming.seededAt) : (current.seededAt ?? 0),
+      days: pruneDays(days),
+    }
+  }
+
+  /**
+   * Build one increment in the stored counter shape.
+   * @param {{ uses?: number, attempts?: number, inputTokens?: number, outputTokens?: number, at: number, seeded?: boolean }} input - one observation.
+   * @returns {object} the increment.
+   */
+  function usageIncrement(input) {
+    const uses = input.uses ?? 0
+    const days = {}
+    if (uses > 0) days[dayKeyOf(input.at)] = uses
+    return {
+      uses,
+      attempts: input.attempts ?? 0,
+      in: input.inputTokens ?? 0,
+      out: input.outputTokens ?? 0,
+      firstAt: uses > 0 ? input.at : 0,
+      lastAt: input.at,
+      seededAt: input.seeded === true ? input.at : 0,
+      days,
+    }
+  }
+
+  /**
+   * Accumulate one observation in memory.
+   *
+   * A model step must never wait for a disk write, and a busy turn produces many
+   * steps, so deltas are batched: the timer flushes them, and every read flushes
+   * first. Reaching the file on time is not worth stalling a request for.
+   * @param {string} route - provider route id.
+   * @param {string} model - model id.
+   * @param {object} increment - output of {@link usageIncrement}.
+   * @returns {void}
+   */
+  function addUsage(route, model, increment) {
+    let byModel = usagePending.get(route)
+    if (byModel === undefined) {
+      byModel = new Map()
+      usagePending.set(route, byModel)
+    }
+    byModel.set(model, mergeUsage(byModel.get(model) ?? blankUsage(), increment))
+    if (usageTimer === undefined) {
+      usageTimer = setTimeout(() => { void flushUsage() }, config.usage.flushMs)
+      // A pending count must never hold the process open.
+      usageTimer.unref?.()
+    }
+  }
+
+  /**
+   * Persist every pending increment.
+   * @returns {Promise<void>} fulfillment after each pending route was written.
+   */
+  async function flushUsage() {
+    if (usageTimer !== undefined) {
+      clearTimeout(usageTimer)
+      usageTimer = undefined
+    }
+    if (usagePending.size === 0) return usageChain
+    const batch = usagePending
+    usagePending = new Map()
+    usageChain = usageChain.then(async () => {
+      for (const [route, byModel] of batch) {
+        try {
+          await store.update(route, (overlay) => {
+            const usage = { ...overlay.usage }
+            for (const [model, increment] of byModel) {
+              usage[model] = mergeUsage(usage[model] ?? blankUsage(), increment)
+            }
+            return { ...overlay, usage: pruneUsage(usage) }
+          })
+        } catch {
+          // A failed write must not silently drop counts: fold the batch back so
+          // the next flush retries it. Recursion is bounded because the timer is
+          // re-armed only by new observations.
+          for (const [model, increment] of byModel) {
+            let retry = usagePending.get(route)
+            if (retry === undefined) {
+              retry = new Map()
+              usagePending.set(route, retry)
+            }
+            retry.set(model, mergeUsage(retry.get(model) ?? blankUsage(), increment))
+          }
+        }
+      }
+    })
+    return usageChain
+  }
+
+  /** Whether one event was already counted, marking it when it was not. */
+  function firstSight(sessionId, seq) {
+    const key = `${sessionId}:${seq}`
+    if (countedUsage.has(key)) return false
+    // Bounded so a long-lived process cannot grow this set without end. Clearing
+    // wholesale only risks one re-count of an ancient event.
+    if (countedUsage.size >= 20000) countedUsage.clear()
+    countedUsage.add(key)
+    return true
+  }
+
+  /**
+   * Fold one committed `assistant/message` into the ledger.
+   * @param {object} event - the session event.
+   * @param {string | undefined} sessionId - owning session.
+   * @param {boolean} [seeded] - whether this came from the historical scan.
+   * @returns {boolean} whether it was counted.
+   */
+  function countMessageEvent(event, sessionId, seeded = false) {
+    if (event?.type !== 'assistant/message') return false
+    if (sessionId === undefined || typeof event.seq !== 'number') return false
+    const source = event.data?.message?.source
+    const route = cleanString(source?.provider)
+    const model = cleanString(source?.model)
+    if (route === undefined || model === undefined) return false
+    if (!firstSight(sessionId, event.seq)) return false
+    const usage = event.data?.usage
+    addUsage(route, model, usageIncrement({
+      uses: 1,
+      inputTokens: nonNegativeInt(usage?.inputTokens, 0),
+      outputTokens: nonNegativeInt(usage?.outputTokens, 0),
+      at: typeof event.time === 'number' ? event.time : Date.now(),
+      seeded,
+    }))
+    return true
+  }
+
+  /**
+   * Aggregate the ledger across routes.
+   *
+   * The picker asks "which models do I favour", which is a question about the
+   * user rather than about a route, so both halves read this instead of each
+   * re-deriving the ordering from per-route files.
+   * @param {number} [now] - current time, for the decaying heat.
+   * @returns {Promise<{ byKey: Map<string, object>, routes: Array<object> }>} the aggregate.
+   */
+  async function usageLedger(now = Date.now()) {
+    await flushUsage()
+    const byKey = new Map()
+    const routes = []
+    for (const route of await store.routes()) {
+      const overlay = await store.read(route)
+      const models = Object.entries(overlay.usage ?? {})
+      if (models.length === 0) continue
+      routes.push({ route, revision: overlay.revision, models: models.length })
+      for (const [model, entry] of models) {
+        byKey.set(keyOf(route, model), { route, model, ...usageView(entry, now) })
+      }
+    }
+    return { byKey, routes }
+  }
+
+  /**
+   * The whole ledger as one report: per-model rows plus profile-wide totals.
+   *
+   * Shared by the tool and the HTTP route so the agent and the panel cannot
+   * disagree about a number the user sees in both places.
+   * @returns {Promise<object>} the report.
+   */
+  async function usageReport() {
+    const ledger = await usageLedger()
+    const models = [...ledger.byKey.values()]
+      .filter(entry => entry.uses > 0 || entry.attempts > 0)
+      .sort((left, right) => right.heat - left.heat || right.uses - left.uses || left.model.localeCompare(right.model))
+    const totals = models.reduce((sum, entry) => ({
+      uses: sum.uses + entry.uses,
+      attempts: sum.attempts + entry.attempts,
+      inputTokens: sum.inputTokens + entry.inputTokens,
+      outputTokens: sum.outputTokens + entry.outputTokens,
+    }), { uses: 0, attempts: 0, inputTokens: 0, outputTokens: 0 })
+    return {
+      enabled: config.usage.enabled,
+      seed: diagnostics.usageSeed ?? null,
+      routes: ledger.routes,
+      totals,
+      models,
+    }
+  }
+
+  /**
+   * Delete recorded usage, for one model, one route, or the whole profile.
+   *
+   * The counters are local and describe the user's own habits, so deleting them
+   * must not require finding a file. Clearing everything also drops the backfill
+   * watermark, so the history is genuinely gone rather than restorable by the
+   * next scan.
+   * @param {string | undefined} route - one route, or every route when undefined.
+   * @param {string | undefined} model - one model, or every model when undefined.
+   * @returns {Promise<object>} what was cleared.
+   */
+  async function resetUsage(route, model) {
+    await flushUsage()
+    const targets = route === undefined ? await store.routes() : [route]
+    const cleared = []
+    for (const target of targets) {
+      const overlay = await store.read(target)
+      if (model === undefined) {
+        if (Object.keys(overlay.usage ?? {}).length === 0) continue
+        await store.update(target, current => ({ ...current, usage: {} }))
+        cleared.push(`${target}/*`)
+        continue
+      }
+      if (overlay.usage?.[model] === undefined) continue
+      await store.update(target, (current) => {
+        const usage = { ...current.usage }
+        delete usage[model]
+        return { ...current, usage }
+      })
+      cleared.push(`${target}/${model}`)
+    }
+    if (route === undefined && model === undefined) {
+      await store.update(SEED_DOC, current => ({ ...current, seeded: {} }))
+      diagnostics.usageCounted = 0
+    }
+    return { ok: true, cleared }
+  }
+
+  /**
+   * Count the existing session logs once, so a fresh install starts with the
+   * history the user already has instead of level 1 everywhere.
+   *
+   * Sessions are marked as they are counted, so an interrupted pass resumes
+   * instead of recounting, and a re-run costs nothing.
+   * @param {object} [query] - the `sessionQuery` service, when the host has one.
+   * @returns {Promise<object>} a summary of what the pass did.
+   */
+  async function seedUsage(query = ctx.get('sessionQuery')) {
+    if (query === undefined || typeof query.listSessions !== 'function') {
+      return { ok: false, reason: 'the sessionQuery service is not available on this host' }
+    }
+    const watermark = await store.read(SEED_DOC)
+    const already = watermark.seeded ?? {}
+    let records
+    try {
+      records = await query.listSessions()
+    } catch (error) {
+      return { ok: false, reason: `could not list sessions: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    let scanned = 0
+    let counted = 0
+    let skipped = 0
+    for (const record of records.slice(0, SEED_SESSION_LIMIT)) {
+      const sessionId = record?.header?.id
+      if (sessionId === undefined) continue
+      if (already[sessionId] !== undefined) { skipped += 1; continue }
+      let log
+      try {
+        log = await query.readSession(sessionId)
+      } catch {
+        // One unreadable or replay-invalid log must not end the pass.
+        continue
+      }
+      let inSession = 0
+      for (const event of log?.events ?? []) {
+        if (countMessageEvent(event, sessionId, true)) inSession += 1
+      }
+      counted += inSession
+      scanned += 1
+      await store.update(SEED_DOC, (overlay) => ({
+        ...overlay,
+        seeded: { ...overlay.seeded, [sessionId]: Date.now() },
+      }))
+    }
+    await flushUsage()
+    return { ok: true, sessions: records.length, scanned, skipped, counted }
   }
 
   /**
@@ -689,6 +1290,10 @@ export function apply(ctx, rawConfig) {
    * @returns {Promise<object>} the snapshot the Client renders.
    */
   async function snapshot(options = {}) {
+    // Counts still in memory are part of the answer: a user who just used a
+    // model must not see yesterday's number until the flush timer fires.
+    await flushUsage()
+    const now = Date.now()
     const groups = await catalog()
     const directories = new Map()
     const merged = []
@@ -722,6 +1327,7 @@ export function apply(ctx, rawConfig) {
           scope: health?.scope ?? 'model',
           at: inDirectory === false ? directory.at : health?.at ?? 0,
           inDirectory,
+          usage: usageView(overlay.usage?.[model], now),
         })
       }
       merged.push({ ...group, rows })
@@ -773,10 +1379,29 @@ export function apply(ctx, rawConfig) {
       for (const row of group.rows) row.alsoOn = (byModel.get(row.model) ?? []).filter(route => route !== row.route)
     }
 
+    // "Which models do I actually work with" is a question about the profile,
+    // not about one route, so the ranking spans every group and is ordered by
+    // decaying heat: the point is current habits, with the lifetime level
+    // carried alongside as the trophy.
+    const allRows = merged.flatMap(group => group.rows)
+    const usageTop = allRows
+      .filter(row => row.usage.uses > 0)
+      .sort((left, right) => right.usage.heat - left.usage.heat
+        || right.usage.uses - left.usage.uses
+        || left.model.localeCompare(right.model))
+      .slice(0, 10)
+      .map(row => ({ route: row.route, model: row.model, ...row.usage }))
+    const usageTotals = allRows.reduce((sum, row) => ({
+      uses: sum.uses + row.usage.uses,
+      inputTokens: sum.inputTokens + row.usage.inputTokens,
+      outputTokens: sum.outputTokens + row.usage.outputTokens,
+    }), { uses: 0, inputTokens: 0, outputTokens: 0 })
+
     return {
       revision: await store.read('__global__').then(overlay => overlay.revision),
       selectorMode: config.selector.mode,
       fallbackEnabled: config.fallback.enabled,
+      usage: { enabled: config.usage.enabled, top: usageTop, totals: usageTotals },
       groups: merged,
       directory: [...directories.entries()].map(([route, value]) => ({
         route,
@@ -910,6 +1535,12 @@ export function apply(ctx, rawConfig) {
       const current = lastRequest.get(payload.agent.id)
       if (current?.model !== undefined) {
         recordHealth(payload.provider, current.model, verdict, 'passive').catch(() => {})
+        // A failed call is not a use — it must not inflate proficiency — but it
+        // is the one honest "attempts" signal the host offers, so it is kept
+        // apart from `uses` rather than thrown away.
+        if (config.usage.enabled) {
+          addUsage(payload.provider, current.model, usageIncrement({ attempts: 1, at: Date.now() }))
+        }
       }
       // Only a model-scoped, switchable failure is ours; everything else keeps
       // the stock behaviour, including the retry policy for real rate limits.
@@ -951,6 +1582,29 @@ export function apply(ctx, rawConfig) {
     })
   })
 
+  // ── Counting: every committed model response, exactly once ──
+
+  if (config.usage.enabled) {
+    // Plain `ctx.on` at the plugin root, matching how the shipped counters
+    // (`token-meter`) observe this event: it is emitted on the session's own
+    // scope and reaches the root listener. Injecting a service here would make
+    // the count stop entirely on a host that lacks it, for no gain.
+    ctx.on('session/event', (session, event) => {
+      const sessionId = cleanString(session?.id)
+      if (sessionId === undefined) return
+      if (countMessageEvent(event, sessionId)) diagnostics.usageCounted += 1
+    })
+
+    // One historical pass, so an existing user does not begin at level 1 on
+    // every model. It is background work: no request and no panel read waits
+    // for it, and it resumes rather than recounting if it is interrupted.
+    if (config.usage.seed) {
+      void seedUsage()
+        .then((result) => { diagnostics.usageSeed = result })
+        .catch(() => {})
+    }
+  }
+
   // ── Inventory: a tool the agent can call, and an HTTP route the UI reads ──
 
   ctx.inject(['tools'], (scope) => {
@@ -961,7 +1615,10 @@ export function apply(ctx, rawConfig) {
         'which are pinned or favorited, and why a model is unusable (retired at the gateway, wrong',
         'protocol for the route, quota exhausted, or a probe failure). Actions: `snapshot` (read the',
         'merged view), `pin`/`unpin`, `favorite`/`unfavorite`, `hide`/`unhide`, `probe` (deep-probe one',
-        'model with a minimal request), `sync` (refresh the gateway directory). Deep probes cost gateway',
+        'model with a minimal request), `sync` (refresh the gateway directory), `usage` (which models',
+        'this profile actually uses, with proficiency level and recent heat), `seed-usage` (re-scan',
+        'existing session logs to backfill the counters), `reset-usage` (clear one',
+        'model\'s counters, or every counter with no `route`). Deep probes cost gateway',
         'rate budget, so probe individual models rather than sweeping a whole catalog.',
       ].join(' '),
       // `tools.register` takes a full ToolDefinition: `parameters` is already
@@ -973,7 +1630,7 @@ export function apply(ctx, rawConfig) {
         properties: {
           action: {
             type: 'string',
-            enum: ['snapshot', 'pin', 'unpin', 'favorite', 'unfavorite', 'hide', 'unhide', 'probe', 'sync', 'diagnostics'],
+            enum: ['snapshot', 'pin', 'unpin', 'favorite', 'unfavorite', 'hide', 'unhide', 'probe', 'sync', 'usage', 'seed-usage', 'reset-usage', 'diagnostics'],
             description: 'What to do.',
           },
           route: { type: 'string', description: 'Provider route id, such as `my-route`.' },
@@ -1032,6 +1689,19 @@ export function apply(ctx, rawConfig) {
             const verdict = await probeModel(target.route, target.model)
             await recordHealth(target.route, target.model, verdict, 'probe')
             return JSON.stringify({ route: target.route, model: target.model, ...verdict }, null, 2)
+          }
+          case 'usage': {
+            return JSON.stringify(await usageReport(), null, 2)
+          }
+          case 'seed-usage': {
+            const result = await seedUsage()
+            diagnostics.usageSeed = result
+            return JSON.stringify(result, null, 2)
+          }
+          case 'reset-usage': {
+            // Clearing the ledger is a privacy affordance: the counters are local
+            // and the user must be able to delete them without hunting for files.
+            return JSON.stringify(await resetUsage(route, model), null, 2)
           }
           default:
             throw new Error(`unknown action "${String(args?.action)}"`)
@@ -1100,6 +1770,17 @@ export function apply(ctx, rawConfig) {
               await recordUse(route, model)
               return json({ ok: true, value: true })
             }
+            case 'usage':
+              return json({ ok: true, value: await usageReport() })
+            case 'seed-usage': {
+              const result = await seedUsage()
+              diagnostics.usageSeed = result
+              return json({ ok: true, value: result, snapshot: await snapshot() })
+            }
+            case 'reset-usage':
+              // A mutation, so it returns the resulting snapshot like every other
+              // mutating action: the panel folds `snapshot` back in.
+              return json({ ok: true, value: await resetUsage(route, model), snapshot: await snapshot() })
             case 'probeBatch': {
               const targets = Array.isArray(body?.targets) ? body.targets.slice(0, config.probe.batch) : []
               const results = []

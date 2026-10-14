@@ -40,6 +40,15 @@ window.__ModuleLoader__.load({
     /** The Host route this half talks to. */
     const ROUTE = '/api/llm-manage'
 
+    /**
+     * How many frequently used models the picker lifts into their own section.
+     *
+     * Capped deliberately: the section is a shortcut to the models the user
+     * actually reaches for, not a second copy of the catalogue, and an uncapped
+     * list would push the first real route group off the screen.
+     */
+    const FREQUENT_LIMIT = 5
+
     /** Dictionary, so both supported locales read naturally. */
     const DICT = {
       en: {
@@ -66,6 +75,27 @@ window.__ModuleLoader__.load({
         pinned: 'pinned',
         sectionPinned: 'Pinned',
         sectionFavorites: 'Favorites',
+        sectionFrequent: 'Most used',
+        level: 'level',
+        levelShort: 'Lv',
+        usesLabel: 'uses',
+        attemptsLabel: 'failed attempts',
+        tokensLabel: 'tokens in/out',
+        lastUsed: 'last used',
+        neverUsed: 'never used',
+        trendUp: 'busier this week',
+        trendDown: 'quieter this week',
+        trendFlat: 'steady this week',
+        roster: 'Most used',
+        rosterEmpty: 'No model has been used yet. Proficiency appears after the first request.',
+        sortLabel: 'Sort',
+        sortDefault: 'Default',
+        sortLevel: 'By proficiency',
+        sortHeat: 'By recent use',
+        seededNote: 'counted from your existing session logs',
+        resetUsage: 'Clear usage',
+        resetUsageTitle: 'Deletes the locally recorded usage counters. This cannot be undone.',
+        usageCleared: 'Usage counters cleared.',
         pickerTitle: 'Model',
         search: 'Search models',
         noModels: 'No models matched.',
@@ -105,6 +135,27 @@ window.__ModuleLoader__.load({
         pinned: '已置顶',
         sectionPinned: '置顶',
         sectionFavorites: '收藏',
+        sectionFrequent: '常用',
+        level: '熟练度',
+        levelShort: 'Lv',
+        usesLabel: '次调用',
+        attemptsLabel: '次失败',
+        tokensLabel: '输入/输出 tokens',
+        lastUsed: '最近使用',
+        neverUsed: '未使用',
+        trendUp: '本周更活跃',
+        trendDown: '本周转冷',
+        trendFlat: '本周持平',
+        roster: '主力阵容',
+        rosterEmpty: '还没有使用记录。发出第一次请求后就会出现熟练度。',
+        sortLabel: '排序',
+        sortDefault: '默认',
+        sortLevel: '按熟练度',
+        sortHeat: '按近期热度',
+        seededNote: '来自已有会话日志的统计',
+        resetUsage: '清空使用统计',
+        resetUsageTitle: '删除本地记录的使用统计，无法撤销。',
+        usageCleared: '使用统计已清空。',
         pickerTitle: '模型',
         search: '搜索模型',
         noModels: '没有匹配的模型。',
@@ -388,6 +439,39 @@ window.__ModuleLoader__.load({
    metadata about one model. Reusing .llmm-chip keeps the two surfaces agreeing on
    how that looks instead of inventing a second treatment for it. */
 .llmm-route{margin-left:auto}
+/* Proficiency is a rank, so it is tinted rather than plain: the colour carries
+   the level at a glance while the number stays exact. Each step is a named token
+   with a neutral fallback, so a theme that does not define them still renders a
+   readable chip instead of an unstyled blob. */
+.llmm-lv{font-variant-numeric:tabular-nums;letter-spacing:0.02em}
+.llmm-lv-1{color:var(--dsw-alias-label-tertiary)}
+.llmm-lv-2{color:var(--dsw-alias-label-secondary)}
+.llmm-lv-3{color:var(--dsw-alias-brand-primary)}
+.llmm-lv-4{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}
+.llmm-lv-5{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);font-weight:500}
+.llmm-lv-6{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);font-weight:600}
+.llmm-lv-7{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);font-weight:700}
+/* Trend is decoration on top of the number, so it must never be the only signal:
+   the title carries the same fact in words. */
+.llmm-trend{flex:none;font-size:10px;line-height:16px}
+.llmm-trend-up{color:var(--dsw-alias-state-success-primary)}
+.llmm-trend-down{color:var(--dsw-alias-label-tertiary)}
+/* The roster strip: three equal cards, so the "heroes" read as a set. */
+.llmm-roster{display:flex;flex-direction:column;gap:6px}
+.llmm-roster-head{font-size:11px;line-height:16px;font-weight:500;color:var(--dsw-alias-label-tertiary)}
+.llmm-roster-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.llmm-hero{display:flex;flex-direction:column;gap:4px;min-width:0;padding:8px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-2)}
+.llmm-hero-top{display:flex;align-items:center;gap:4px}
+.llmm-hero-name{font-family:var(--ds-font-family-code);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-hero-meta{font-size:11px;line-height:14px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-bar{height:4px;border-radius:2px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-border-l3));overflow:hidden}
+.llmm-bar-fill{height:100%;border-radius:2px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-label-secondary));transition:width .2s ease}
+/* Sort control: a segmented row of text buttons, matching the panel's own chips. */
+.llmm-sort{display:flex;align-items:center;gap:4px;font-size:11px;line-height:16px}
+.llmm-sort-label{color:var(--dsw-alias-label-tertiary)}
+.llmm-sortbtn{padding:1px 8px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;cursor:pointer}
+.llmm-sortbtn:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-sortbtn-on{border-color:var(--dsw-alias-brand-primary,var(--dsw-alias-border-l3));color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary));font-weight:500}
 /* Row metrics come from the shipped model picker's own option
    (ui-model-selection ModelSelect.module.css .option): 34px minimum, 5px/7px padding,
    md radius, 13/18 text. This card replaces that picker, so it should measure the
@@ -502,12 +586,48 @@ window.__ModuleLoader__.load({
         favorites: rows.filter(row => row.favorite).length,
       }), [rows])
 
+      /** How the list is ordered; `default` is the shipped decision-first order. */
+      const [sortMode, setSortMode] = useState('default')
+
+      const usageRows = useMemo(
+        () => rows.filter(row => row.usage !== null && row.usage !== undefined && row.usage.uses > 0),
+        [rows],
+      )
+      // The roster is the "heroes" strip: the three models this route is actually
+      // worked with, most-used first. Ranked by decaying heat rather than the
+      // lifetime total, so it reflects current habits instead of the oldest
+      // model winning forever.
+      const roster = useMemo(
+        () => usageRows.slice()
+          .sort((left, right) => right.usage.heat - left.usage.heat
+            || right.usage.uses - left.usage.uses
+            || left.model.localeCompare(right.model))
+          .slice(0, 3),
+        [usageRows],
+      )
+      const usageTotals = useMemo(() => usageRows.reduce((sum, row) => ({
+        uses: sum.uses + row.usage.uses,
+        tokens: sum.tokens + row.usage.inputTokens + row.usage.outputTokens,
+        seeded: sum.seeded || row.usage.seeded,
+      }), { uses: 0, tokens: 0, seeded: false }), [usageRows])
+
       // Pinned, then favorites, then flagged rows, then the rest: the panel's
-      // first screen is the part that needs a decision.
+      // first screen is the part that needs a decision. The usage orderings are
+      // opt-in so the default view stays the one the panel was designed around.
       const ordered = useMemo(() => rows.slice().sort((left, right) => {
+        const usageOf = (row) => (row.usage === null || row.usage === undefined ? null : row.usage)
+        if (sortMode === 'level') {
+          const level = (usageOf(right)?.level ?? 0) - (usageOf(left)?.level ?? 0)
+          if (level !== 0) return level
+          const uses = (usageOf(right)?.uses ?? 0) - (usageOf(left)?.uses ?? 0)
+          if (uses !== 0) return uses
+        } else if (sortMode === 'heat') {
+          const heat = (usageOf(right)?.heat ?? 0) - (usageOf(left)?.heat ?? 0)
+          if (heat !== 0) return heat
+        }
         const score = (row) => (row.pinned ? 0 : row.favorite ? 1 : isProblem(row.status) ? 2 : 3)
         return score(left) - score(right) || left.model.localeCompare(right.model)
-      }), [rows])
+      }), [rows, sortMode])
       const visible = expanded ? ordered : ordered.slice(0, 8)
 
       /**
@@ -610,6 +730,51 @@ window.__ModuleLoader__.load({
               h('span', { className: 'llmm-count' }, `${t('usable')} `, h('b', null, String(counts.usable))),
               h('span', { className: 'llmm-count' }, `${t('problems')} `, h('b', null, String(counts.problems))),
               h('span', { className: 'llmm-count' }, `${t('pinned')} `, h('b', null, String(counts.pinned))),
+              // Usage is shown only once it exists: a "0 uses" counter on a
+              // profile that has never called this route is noise, and the zero
+              // would read as a fault rather than as "no data yet".
+              usageTotals.uses > 0
+                ? h('span', { className: 'llmm-count', title: `${t('tokensLabel')}: ${usageTotals.tokens}${usageTotals.seeded ? ` · ${t('seededNote')}` : ''}` },
+                  `${t('usesLabel')} `, h('b', null, String(usageTotals.uses)))
+                : null,
+            )
+            : null,
+          roster.length > 0
+            ? h('div', { className: 'llmm-roster' },
+              h('div', { className: 'llmm-roster-head' }, t('roster')),
+              h('div', { className: 'llmm-roster-cards' }, roster.map(row => h('div', {
+                key: row.model,
+                className: 'llmm-hero',
+                title: `${row.model} · ${row.usage.uses} ${t('usesLabel')} · ${row.usage.inputTokens + row.usage.outputTokens} ${t('tokensLabel')}`,
+              },
+                h('div', { className: 'llmm-hero-top' },
+                  h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(row.usage.level, 7)}` },
+                    `${t('levelShort')}.${row.usage.level}`),
+                  h('span', { className: `llmm-trend llmm-trend-${row.usage.trend}`, title: t(`trend${row.usage.trend === 'up' ? 'Up' : row.usage.trend === 'down' ? 'Down' : 'Flat'}`) },
+                    row.usage.trend === 'up' ? '↑' : row.usage.trend === 'down' ? '↓' : '→'),
+                ),
+                h('div', { className: 'llmm-hero-name' }, row.model),
+                // A bar rather than a percentage: the question the card answers is
+                // "how far to the next level", which is a distance, not a score.
+                h('div', { className: 'llmm-bar' },
+                  h('div', { className: 'llmm-bar-fill', style: { width: `${Math.round(row.usage.progress * 100)}%` } }),
+                ),
+                h('div', { className: 'llmm-hero-meta' },
+                  `${row.usage.uses} ${t('usesLabel')} · ${t('lastUsed')} ${ageOf(row.usage.lastAt)}`,
+                ),
+              ))),
+            )
+            : null,
+          usageRows.length > 0
+            ? h('div', { className: 'llmm-sort' },
+              h('span', { className: 'llmm-sort-label' }, t('sortLabel')),
+              ['default', 'level', 'heat'].map(mode => h('button', {
+                key: mode,
+                type: 'button',
+                className: `llmm-sortbtn${sortMode === mode ? ' llmm-sortbtn-on' : ''}`,
+                'aria-pressed': sortMode === mode,
+                onClick: () => setSortMode(mode),
+              }, t(mode === 'default' ? 'sortDefault' : mode === 'level' ? 'sortLevel' : 'sortHeat'))),
             )
             : null,
           busy && snap === null ? h('div', { className: 'llmm-hint' }, t('loading')) : null,
@@ -625,6 +790,22 @@ window.__ModuleLoader__.load({
               h('span', { className: 'llmm-name', title: row.model }, row.model),
               isProblem(row.status)
                 ? h('span', { className: 'llmm-chip' }, statusLabel(row.status))
+                : null,
+              // Proficiency, then the recent count: the level is the trophy and
+              // the 7-day number is the current form, so they are shown together
+              // but never merged into one figure.
+              row.usage !== null && row.usage !== undefined && row.usage.uses > 0
+                ? h('span', {
+                  className: `llmm-chip llmm-lv llmm-lv-${Math.min(row.usage.level, 7)}`,
+                  title: `${t('level')} ${row.usage.level} · ${t('usesLabel')} ${row.usage.uses}`
+                    + (row.usage.nextAt > 0 ? ` · ${t('level')} ${row.usage.level + 1} @ ${row.usage.nextAt}` : '')
+                    + ` · ${t('tokensLabel')} ${row.usage.inputTokens}/${row.usage.outputTokens}`
+                    + (row.usage.seeded ? ` · ${t('seededNote')}` : ''),
+                }, `${t('levelShort')}.${row.usage.level}`)
+                : null,
+              row.usage !== null && row.usage !== undefined && row.usage.recent7 > 0
+                ? h('span', { className: `llmm-trend llmm-trend-${row.usage.trend}`, title: t(`trend${row.usage.trend === 'up' ? 'Up' : row.usage.trend === 'down' ? 'Down' : 'Flat'}`) },
+                  `${row.usage.trend === 'up' ? '↑' : row.usage.trend === 'down' ? '↓' : '→'}${row.usage.recent7}`)
                 : null,
               h('span', { className: 'llmm-why', title: `${sourceLabel(row.source)} · ${ageOf(row.at)}${row.reason ? ` · ${row.reason}` : ''}` },
                 row.reason !== '' ? `${sourceLabel(row.source)} · ${ageOf(row.at)} · ${row.reason}` : `${statusLabel(row.status)} · ${sourceLabel(row.source)}`,
@@ -663,6 +844,20 @@ window.__ModuleLoader__.load({
               style: { marginTop: '6px' },
               onClick: () => setExpanded(value => !value),
             }, expanded ? t('showFewer') : `${t('showAll')} (${ordered.length})`)
+            : null,
+          // Deleting the counters must be reachable without hunting for a file,
+          // and it is confirmed because it cannot be undone.
+          usageTotals.uses > 0
+            ? h('button', {
+              type: 'button',
+              className: 'llmm-btn',
+              style: { marginTop: '6px' },
+              disabled: pending === 'reset-usage',
+              onClick: () => {
+                if (typeof confirm === 'function' && !confirm(t('resetUsageTitle'))) return
+                run('reset-usage', { action: 'reset-usage', route })
+              },
+            }, t('resetUsage'))
             : null,
           snap && snap.directory
             ? h('div', { className: 'llmm-hint' }, snap.directory
@@ -784,6 +979,10 @@ window.__ModuleLoader__.load({
                 model: row.model,
                 pinned: row.pinned === true,
                 favorite: row.favorite === true,
+                // Carried through so the menu can show proficiency and lift the
+                // most-used models. Defaulted here rather than at each use site,
+                // because the shipped-directory fallback below has no usage at all.
+                usage: row.usage ?? null,
               })),
           }))
         }
@@ -794,7 +993,7 @@ window.__ModuleLoader__.load({
           route: group.id,
           name: group.name,
           rows: group.models.map(model => ({
-            route: group.id, model: model.id, pinned: false, favorite: false,
+            route: group.id, model: model.id, pinned: false, favorite: false, usage: null,
           })),
         }))
       }, [snap, state])
@@ -824,13 +1023,37 @@ window.__ModuleLoader__.load({
           }
         }
         const lifted = new Set([...pinned, ...favorites].map(row => `${row.route}/${row.model}`))
+        // Frequently used models, most-used first, so a model the user works with
+        // every day rises into view without being pinned by hand. It never
+        // duplicates a pin or a favorite, and it is capped: this is a shortcut to
+        // the top of the list, not a second copy of the catalogue.
+        const frequent = []
+        const frequentSeen = new Set()
+        for (const group of catalogue) {
+          for (const row of group.rows) {
+            // The search must narrow every section, including this one. Building
+            // it from the unfiltered catalogue made 「常用」 ignore the query and
+            // leak rows into a search that should not have matched them.
+            if (!matches(row)) continue
+            const key = `${row.route}/${row.model}`
+            if (lifted.has(key) || row.usage === null || row.usage.uses <= 0) continue
+            if (frequentSeen.has(key)) continue
+            frequentSeen.add(key)
+            frequent.push(row)
+          }
+        }
+        frequent.sort((left, right) => right.usage.heat - left.usage.heat
+          || right.usage.uses - left.usage.uses
+          || left.model.localeCompare(right.model))
+        const frequentTop = frequent.slice(0, FREQUENT_LIMIT)
+        for (const row of frequentTop) lifted.add(`${row.route}/${row.model}`)
         const groups = catalogue
           .map(group => ({
             ...group,
-            rows: (byRoute.get(group.route) ?? []).filter(row => !lifted.has(`${row.route}/${row.model}`)),
+            rows: (byRoute.get(group.route) ?? []).filter(row => !lifted.has(`${group.route}/${row.model}`)),
           }))
           .filter(group => group.rows.length > 0)
-        return { pinned, favorites, groups }
+        return { pinned, favorites, frequent: frequentTop, groups }
       }, [catalogue, query])
 
       /**
@@ -884,16 +1107,29 @@ window.__ModuleLoader__.load({
         const status = overlayRow ? overlayRow.status : 'unknown'
         const down = isProblem(status)
         const active = current !== null && current.provider === row.route && current.model === row.model
+        const usage = row.usage
+        // Only a model that has actually been used earns a chip: a row of "Lv.1"
+        // badges on an untouched catalogue is noise, not information.
+        const leveled = usage !== null && usage !== undefined && usage.uses > 0
         return h('button', {
           key: `${row.route}/${row.model}`,
           type: 'button',
           className: `llmm-item${active ? ' llmm-active' : ''}${down ? ' llmm-down' : ''}`,
-          title: overlayRow && overlayRow.reason ? overlayRow.reason : statusLabel(status),
+          title: leveled
+            ? `${t('level')} ${usage.level} · ${usage.uses} ${t('usesLabel')} · ${usage.inputTokens + usage.outputTokens} ${t('tokensLabel')} · ${t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`)}`
+            : (overlayRow && overlayRow.reason ? overlayRow.reason : statusLabel(status)),
           onClick: () => { choose(row) },
         },
           h('span', { className: `llmm-dot ${statusTone(status)}` }),
           h('span', { className: 'llmm-name' }, row.model),
           down ? h('span', { className: 'llmm-chip' }, statusLabel(status)) : null,
+          // Proficiency sits next to the name, on the same line as the other
+          // chips, so the menu reads the same way as the panel.
+          leveled ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(usage.level, 7)}` },
+            `${t('levelShort')}.${usage.level}`) : null,
+          leveled && usage.trend !== 'flat'
+            ? h('span', { className: `llmm-trend llmm-trend-${usage.trend}` }, usage.trend === 'up' ? '↑' : '↓')
+            : null,
           // The route chip takes the panel's "also on" slot: the same kind of
           // annotation, pushed to the right edge by its own margin.
           showRoute ? h('span', { className: 'llmm-chip llmm-route' }, row.route) : null,
@@ -913,7 +1149,7 @@ window.__ModuleLoader__.load({
         rows.map(row => renderItem(row, spansRoutes(rows))),
       )
 
-      const shown = sections.pinned.length + sections.favorites.length
+      const shown = sections.pinned.length + sections.favorites.length + sections.frequent.length
         + sections.groups.reduce((total, group) => total + group.rows.length, 0)
 
       const triggerLabel = current === null
@@ -946,6 +1182,11 @@ window.__ModuleLoader__.load({
             : null,
           sections.favorites.length > 0
             ? renderSection('llmm-favorites', t('sectionFavorites'), sections.favorites)
+            : null,
+          // Most used, between the user's explicit choices and the raw catalogue:
+          // earned by use rather than declared by hand.
+          sections.frequent.length > 0
+            ? renderSection('llmm-frequent', t('sectionFrequent'), sections.frequent)
             : null,
           sections.groups.map(group => renderSection(
             group.route, group.name || group.route, group.rows,

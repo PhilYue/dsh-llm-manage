@@ -46,10 +46,10 @@
     "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
-  "author": "PhilYue <phil_yue@yeah.net>",
+  "author": "PhilYue",
   "repository": {
     "type": "git",
-    "url": "https://github.com/PhilYue/dsh-llm-manage.git"
+    "url": "https://github.com/PhilYue/dsh-llm-manage"
   },
   "bugs": {
     "url": "https://github.com/PhilYue/dsh-llm-manage/issues"

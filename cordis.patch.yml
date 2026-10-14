@@ -33,3 +33,16 @@
           # '' means "derive the chain from pins/favorites, then catalog order".
           enabled: true
           chain: []
+        # Local usage counters, from which each model's proficiency level and
+        # recent-use heat are derived. Counted from committed assistant messages
+        # in this profile's own session logs; nothing leaves the machine and no
+        # request is made. Deleting the counters is offered by the panel and by
+        # the `reset-usage` tool action.
+        usage:
+          enabled: true
+          # One pass over existing session logs at startup, so an established
+          # profile does not begin at level 1 on every model.
+          seed: true
+          # Counters are batched to disk on this interval instead of written per
+          # message.
+          flushMs: 5000

@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Model Manager",
-    "description": "Pins favorite models to the top, records why each model is unusable, reconciles the gateway's live directory, and switches models automatically when one model's quota runs out."
+    "description": "Pins favorite models to the top, tracks how much each model is actually used with a proficiency level and recent-use heat, records why each model is unusable, reconciles the gateway's live directory, and switches models automatically when one model's quota runs out."
   }
 }

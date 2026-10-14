@@ -329,6 +329,88 @@ const snapAfter = await (await handler.fetch(new Request('http://127.0.0.1:3080/
 const pinnedOnHost = (snapAfter?.value?.groups?.[0]?.rows ?? []).filter(r => r.pinned).map(r => r.model)
 check('the click reached the Host and persisted', pinnedOnHost.length > 0, pinnedOnHost.join(','))
 
+// ── the proficiency ledger reaches the panel ────────────────────────────────
+// Two models are seeded with deliberately different shapes: one old and
+// well-used, one recent and lightly used. That makes "by proficiency" and "by
+// recent use" produce DIFFERENT first rows, so the two orderings can be told
+// apart — with a single hot-and-heavy model both modes would agree and a broken
+// one would still pass.
+const usageEmit = (name, ...args) => { for (const cb of listeners[name] ?? []) cb(...args) }
+const usageMessage = (seq, model, time, usage) => ({
+  type: 'assistant/message',
+  seq,
+  time,
+  data: {
+    turn: 1,
+    step: 1,
+    message: { role: 'assistant', source: { kind: 'model', provider: ROUTE, model } },
+    stream: [],
+    usage,
+  },
+})
+const UI_DAY = 86400000
+const UI_NOW = Date.now()
+const VETERAN = at(3)
+const RECENT = at(4)
+for (let seq = 1; seq <= 12; seq += 1) {
+  usageEmit('session/event', { id: 'sess-ui' },
+    usageMessage(seq, VETERAN, UI_NOW - 30 * UI_DAY, { inputTokens: 10, outputTokens: 2 }))
+}
+for (let seq = 20; seq <= 23; seq += 1) {
+  usageEmit('session/event', { id: 'sess-ui' },
+    usageMessage(seq, RECENT, UI_NOW - 60000, { inputTokens: 10, outputTokens: 2 }))
+}
+
+// The panel reads a snapshot on mount, so the refreshed read is what proves the
+// counters reached the surface the user actually looks at.
+const refreshButton = container.querySelector('.llmm-actions button')
+await act(async () => {
+  refreshButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await waitFor(() => container.querySelector('.llmm-roster') !== null)
+})
+
+const roster = container.querySelector('.llmm-roster')
+const heroNames = () => Array.from(container.querySelectorAll('.llmm-hero-name')).map(node => node.textContent)
+check('the panel shows a most-used roster once models have been used',
+  roster !== null && heroNames().length > 0, heroNames().join(' / '))
+check('the roster ranks by recent heat, not by lifetime total',
+  heroNames()[0] === RECENT, `${heroNames().join(' / ')} — expected ${RECENT} first`)
+check('a roster card shows the proficiency level',
+  (container.querySelector('.llmm-hero .llmm-lv')?.textContent ?? '').startsWith('Lv'),
+  container.querySelector('.llmm-hero .llmm-lv')?.textContent ?? 'no level chip')
+check('a well-used model reaches level 2',
+  Array.from(container.querySelectorAll('.llmm-lv')).some(node => node.textContent === 'Lv.2'),
+  Array.from(container.querySelectorAll('.llmm-lv')).map(n => n.textContent).join(','))
+check('the roster card shows distance to the next level as a bar',
+  container.querySelector('.llmm-hero .llmm-bar-fill') !== null
+  && /width:\s*\d+%/.test(container.querySelector('.llmm-hero .llmm-bar-fill').getAttribute('style') ?? ''),
+  container.querySelector('.llmm-hero .llmm-bar-fill')?.getAttribute('style') ?? 'no bar')
+const countsText = container.querySelector('.llmm-counts')?.textContent ?? ''
+check('the panel totals the recorded uses',
+  /16/.test(countsText) && /uses|次调用/.test(countsText), countsText)
+
+// The sort control: the two modes must disagree, because they answer different
+// questions ("what am I best at" vs "what am I reaching for today").
+const firstName = () => container.querySelector('.llmm-row .llmm-name')?.textContent ?? ''
+const sortButtons = () => Array.from(container.querySelectorAll('.llmm-sortbtn'))
+const sortBy = async (index) => {
+  await act(async () => {
+    sortButtons()[index].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => sortButtons()[index].getAttribute('aria-pressed') === 'true')
+  })
+}
+check('the panel offers a sort control once usage exists', sortButtons().length === 3,
+  sortButtons().map(b => b.textContent).join(' / '))
+await sortBy(1)
+check('sorting by proficiency puts the highest level first', firstName() === VETERAN,
+  `${firstName()} — expected ${VETERAN}`)
+await sortBy(2)
+check('sorting by recent use puts the hottest model first', firstName() === RECENT,
+  `${firstName()} — expected ${RECENT}`)
+await sortBy(0)
+check('the default sort is still available and re-selectable',
+  sortButtons()[0].getAttribute('aria-pressed') === 'true')
+
 // A tooltip must appear on hover, and it must be rendered outside the scrolling
 // row list so no ancestor can clip it.
 const starButton = buttons().find(b => (b.getAttribute('aria-label') ?? '').includes('收藏') || (b.getAttribute('aria-label') ?? '').includes('Favorite'))
@@ -525,6 +607,29 @@ check('the Pinned section holds the pinned model',
   pinnedAt >= 0 && open[pinnedAt].items.some(row => row.name === pinnedModel), `${pinnedModel}`)
 check('the Favorites section holds the favorited model',
   favoritesAt >= 0 && open[favoritesAt].items.some(row => row.name === favoredModel), `${favoredModel}`)
+
+// The 「常用」 section is earned by use rather than declared by hand, so it sits
+// after the user's explicit choices and shows the most-used model first. It is
+// capped, because it is a shortcut to the top of the list rather than a second
+// copy of the catalogue.
+const frequentAt = sectionNamed(/^(Most used|常用)$/)
+check('the picker lifts frequently used models into their own section',
+  frequentAt > favoritesAt, `at ${frequentAt} of ${open.length} — ${open.map(s => s.title.split(' (')[0]).join(' | ')}`)
+check('the frequently-used section leads with the hottest model',
+  frequentAt >= 0 && open[frequentAt].items[0]?.name === RECENT,
+  open[frequentAt]?.items.map(r => r.name).join(' / ') ?? 'no section')
+check('the frequently-used section is capped at five rows',
+  frequentAt >= 0 && open[frequentAt].items.length <= 5,
+  `${open[frequentAt]?.items.length ?? 0} row(s)`)
+check('a used model carries its proficiency level in the picker',
+  open.some(section => section.items.some(row => row.name === VETERAN))
+  && Array.from(pickerMenu().querySelectorAll('.llmm-item')).some(item =>
+    item.querySelector('.llmm-name')?.textContent === VETERAN
+    && (item.querySelector('.llmm-lv')?.textContent ?? '').startsWith('Lv')),
+  Array.from(pickerMenu().querySelectorAll('.llmm-item')).map(i => `${i.querySelector('.llmm-name')?.textContent}:${i.querySelector('.llmm-lv')?.textContent ?? '-'}`).slice(0, 5).join(' '))
+check('an untouched model carries no proficiency chip',
+  Array.from(pickerMenu().querySelectorAll('.llmm-item')).filter(item => item.querySelector('.llmm-lv') === null).length > 0,
+  'every row is chipped, so the chip says nothing')
 
 // The regression that matters most: lifting rows into sections must not list them
 // twice. A model in both lists is offered under Pinned only, because a pin
@@ -863,6 +968,23 @@ check('search narrows the lifted sections as well as the route groups',
   searched.join(', ') || '(nothing matched)')
 
 await act(async () => { pickerRoot.unmount() })
+
+// ── deleting the counters ───────────────────────────────────────────────────
+// The counters describe the user's own habits, so deleting them must be
+// reachable from the panel and must actually delete them — a "clear" button that
+// only hides the numbers on screen would be worse than none.
+const clearedPanel = await (await hostCall({ action: 'reset-usage', route: ROUTE })).json()
+check('clearing usage from the panel reports what it cleared',
+  clearedPanel.ok !== false && clearedPanel.snapshot !== undefined && (clearedPanel.value?.cleared ?? []).length > 0,
+  JSON.stringify(clearedPanel.value?.cleared ?? null))
+const usageAfterClear = await (await hostCall({ action: 'usage' })).json()
+check('clearing usage leaves no counter behind',
+  (usageAfterClear?.value?.models ?? []).length === 0,
+  `models remaining: ${(usageAfterClear?.value?.models ?? []).length}`)
+const snapAfterClear = await (await hostCall({ action: 'snapshot' })).json()
+check('a cleared counter reads as never used, not as a stale number',
+  (snapAfterClear?.value?.groups ?? []).flatMap(g => g.rows).every(row => (row.usage?.uses ?? 0) === 0),
+  'a row still reports uses after the counters were cleared')
 
 await act(async () => { root.unmount() })
 rmSync(HOME, { recursive: true, force: true })

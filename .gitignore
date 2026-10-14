@@ -1,8 +1,17 @@
 # Screenshots from `node screenshot.mjs`. Never committed: the capture is taken from a
 # running harness, so it shows whatever routes and model inventory that harness has —
 # which is the maintainer's own deployment, not something to publish. Run the script to
-# generate them locally.
-docs/
+# generate them locally. Those captures are named panel-<theme>.png / picker-<theme>.png
+# with a theme suffix.
+docs/panel-*.png
+docs/picker-*.png
+
+# The synthetic renders (`node preview.mjs --png docs`) are the exception: they are
+# rendered from an invented catalogue, so they name no real route, and they are what
+# the README publishes. Everything else in docs/ stays local.
+docs/*
+!docs/panel.png
+!docs/picker.png
 
 # Dependencies, if this package is ever developed in place.
 node_modules/

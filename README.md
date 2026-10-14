@@ -67,6 +67,10 @@ across upgrades. Defaults:
     fallback:
       enabled: true
       chain: []         # 'route/model' entries, tried first
+    usage:
+      enabled: true     # local proficiency/heat counters
+      seed: true        # one pass over existing session logs at startup
+      flushMs: 5000     # counters are batched to disk on this interval
 ```
 
 The fallback chain order is: `fallback.chain`, then pinned models, then favorites, then the
@@ -300,15 +304,20 @@ The panel, from the same renderer:
 
 ![The models panel, rendered from the same synthetic catalogue](docs/panel.png)
 
-The picker opens on **Pinned**, then **Favorites**, then one section per route. Pins and
-favorites are lifted *out* of their route and shown once, at the top, so a favorite is one
-click away no matter how many routes the profile has or how many models sit ahead of it
-alphabetically. Below the sections, each route still lists everything else, minus the rows
-already lifted — every listed model is offered exactly once, and hidden models are not
-offered at all.
+The picker opens on **Pinned**, then **Favorites**, then **Most used**, then one section per
+route. Pins and favorites are lifted *out* of their route and shown once, at the top, so a
+favorite is one click away no matter how many routes the profile has or how many models sit
+ahead of it alphabetically. Below the sections, each route still lists everything else, minus
+the rows already lifted — every listed model is offered exactly once, and hidden models are
+not offered at all.
 
 A model that is both pinned and favorited appears under **Pinned** only, matching the
 fallback chain's own precedence, where a pin outranks a favorite.
+
+**Most used** is earned rather than declared: it holds the five models this profile reaches
+for most, ranked by heat, so the models you actually work with rise to the top without being
+pinned by hand. It is capped, because it is a shortcut to the top of the list rather than a
+second copy of the catalogue, and it never repeats a pin or a favorite.
 
 Because a lifted row is no longer under its route's heading, a section that spans more than
 one route prints the route beside each model. The same model id on two routes is two
@@ -319,6 +328,11 @@ Rows keep their health dot and reason chip, so an unusable model is visibly unus
 too — but it is still *selectable*. The plugin's view of a model can be stale, and hiding a
 model from the picker is the one thing this design refuses to do silently. Search filters
 across the lifted sections as well as the route groups.
+
+A model that has been used carries a proficiency chip beside its name (`Lv.3`) and a small
+trend arrow when this week differs from last. A model that has never been used carries no
+chip at all: a wall of `Lv.1` badges on an untouched catalogue would be noise rather than
+information, so the chip itself is the signal that there is history behind a row.
 
 The picker is styled from the panel's own vocabulary rather than as a separate design: the
 same row box (padding, radius, hover background **and** hover border), the same dimming for
@@ -346,19 +360,61 @@ at reduced opacity instead of appearing only on hover, because a touch device ha
 Every mutating action returns the new state under a top-level `snapshot`; that is the
 contract that makes the optimistic update safe.
 
+### Proficiency and recent use
+
+The panel's top card is **Most used**: the three models this route is actually worked with,
+each with its level, a bar to the next level, and the number of uses. Below the counts, a
+sort control switches the list between the default order, proficiency, and recent use.
+
+Both numbers come from a local ledger, and the distinction between them is the point:
+
+- **Level** is earned from the lifetime count and never decreases. It answers "how much have
+  I used this model", which is why it does not fall when you spend a week elsewhere.
+- **Heat** decays with a 14-day half-life, so it answers "what am I reaching for now". The
+  **Most used** sections rank by heat, not by the lifetime total, so the oldest model does
+  not win forever.
+
+The level steps are 0, 10, 30, 80, 200, 500 and 1200 uses, giving levels 1–7. Tokens are
+recorded and displayed but deliberately do not score: a handful of enormous requests should
+not read as expertise.
+
+The ledger is counted from **committed assistant messages in this profile's own session
+logs**. Nothing is sent anywhere and no request is made to build it. Concretely, three
+choices keep the numbers honest:
+
+- Counting from committed messages rather than from clicks on the menu means the ledger
+  reflects work actually done. Picking a model you then cancel does not count.
+- A retried request is recorded as an *attempt*, never as a *use*. A flaky gateway would
+  otherwise multiply one answer into several levels of proficiency. (This is also why the
+  ledger does not hook the streaming event: that one wraps every call, including retries and
+  replays.)
+- A replayed session event is deduplicated, so resuming a session does not double count it.
+
+Because the counters are local and describe your own habits, deleting them does not require
+hunting for a file: **Clear usage** at the bottom of the panel, or the `reset-usage` tool
+action, for one model, one route, or the whole profile. Set `usage.enabled: false` to turn
+the ledger off entirely.
+
 ## Storage
 
 One atomically-written JSON document per route under
 `$DSH_HOME/storages/llm-manage/<route>.json`, holding `favorites`, `pins`, `hidden`,
-`recent` and `health` (`status`, `source`, `detail`, `scope`, `at`). Deleting the file
-resets that route's overlay.
+`recent` and `health` (`status`, `source`, `detail`, `scope`, `at`), plus the `usage`
+counters. Deleting the file resets that route's overlay.
+
+Usage is the one part of that document written in batches rather than per event — counters
+are debounced (`usage.flushMs`) because a session can commit many messages in a row, and the
+panel flushes before it reads. The backfill watermark lives in a separate
+`__usage__.json` in the same directory.
 
 ## Agent tool
 
 The `llm_models` tool exposes the same operations: `snapshot`, `pin`, `unpin`, `favorite`,
-`unfavorite`, `hide`, `unhide`, `probe`, `sync`, `diagnostics`. `snapshot` and `diagnostics`
-need no extra arguments; `sync` needs `route`; `probe` and the overlay actions need both
-`route` and `model`. The browser half reads the same data over `POST /api/llm-manage`.
+`unfavorite`, `hide`, `unhide`, `probe`, `sync`, `usage`, `seed-usage`, `reset-usage`,
+`diagnostics`. `snapshot` and `diagnostics` need no extra arguments; `sync` needs `route`;
+`probe` and the overlay actions need both `route` and `model`. `usage` reports the ledger,
+`seed-usage` re-runs the historical scan, and `reset-usage` deletes counters (all of them
+when given no `route`). The browser half reads the same data over `POST /api/llm-manage`.
 
 ## Applying a change after install
 
@@ -389,6 +445,13 @@ Enabling or disabling the bundle does not bust the ESM module cache for either h
   your gateway actually serves that endpoint. If it does not, the model is reported as
   protocol-incompatible rather than silently "fixed".
 - Passive learning needs a real failed request to observe a reason.
+- The usage ledger reads session logs through the host's session service. A host that does
+  not expose it still counts live traffic, but the historical backfill reports itself as
+  unavailable instead of silently reporting zero history.
+- The ledger is per profile, not per project: sessions from different working directories
+  share one set of counters, because the profile is what owns the model configuration.
+- A message that arrives before the plugin is loaded is not counted live. The startup
+  backfill covers it on the next run, unless `usage.seed` is off.
 - The quota fallback needs the failing model's id, which it takes from the last
   `agent/request` it observed for that session.
 - The managed picker shadows the shipped picker at `priority: -1` and re-supplies its
