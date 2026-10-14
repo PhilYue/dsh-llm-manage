@@ -545,17 +545,26 @@ check('the backfill resumes from its watermark instead of recounting',
 // proficiency survives a restart rather than resetting to zero.
 const beforeRestart = JSON.parse(readFileSync(storeFile, 'utf8'))
 writeFileSync(storeFile, JSON.stringify({ ...beforeRestart, pins: [{ route: ROUTE, model: at(0) }] }))
+let pendingSeed
+const injectNames = []
 routes = []
 plugin.apply({
-  inject: (_names, cb) => cb({
-    tools: { register: () => () => {} },
-    on: () => () => {},
-    effect: (fn) => { const d = typeof fn === 'function' ? fn() : undefined; return typeof d === 'function' ? d : () => {} },
-    get: (k) => {
-      if (k === 'connection') return { fetch: { register: (r) => { routes.push(r); return () => {} } } }
-      return hostGet(k)
-    },
-  }),
+  inject: (names, cb) => {
+    injectNames.push(...names)
+    // This host has not registered its query backend yet. A plugin that wants a
+    // backfill has to ask to be told when it appears; sampling `ctx.get` here
+    // would see nothing and silently skip the pass forever.
+    if (names.includes('sessionQuery')) { pendingSeed = cb; return }
+    cb({
+      tools: { register: () => () => {} },
+      on: () => () => {},
+      effect: (fn) => { const d = typeof fn === 'function' ? fn() : undefined; return typeof d === 'function' ? d : () => {} },
+      get: (k) => {
+        if (k === 'connection') return { fetch: { register: (r) => { routes.push(r); return () => {} } } }
+        return hostGet(k)
+      },
+    })
+  },
   on: () => () => {},
   effect: (fn) => { const d = typeof fn === 'function' ? fn() : undefined; return typeof d === 'function' ? d : () => {} },
   get: hostGet,
@@ -596,6 +605,31 @@ check('reset-usage with no route clears every counter',
   clearedAll.body?.value?.ok === true
   && (await call2({ action: 'usage' })).body?.value?.models?.length === 0,
   `cleared=${clearedAll.body?.value?.cleared?.length ?? 0} route(s)`)
+
+// ── a query backend that registers after this plugin ────────────────────────
+// The startup backfill is the only thing standing between a fresh profile and an
+// empty roster, and registration order is not guaranteed. Subscribing to the
+// dependency is what makes the pass order-independent; sampling it during `apply`
+// produced a silent no-op that looked exactly like an empty history.
+check('the backfill subscribes to the query service instead of sampling it during apply',
+  pendingSeed !== undefined,
+  `injections requested: ${injectNames.join(', ')}`)
+if (pendingSeed !== undefined) {
+  pendingSeed({
+    sessionQuery: {
+      listSessions: async () => [{ header: { id: 'sess-late' } }],
+      readSession: async () => ({
+        header: { id: 'sess-late' },
+        events: [assistantMessage(1, 'late-model', NOW, { inputTokens: 3, outputTokens: 1 })],
+      }),
+    },
+  })
+  await new Promise(resolve => setTimeout(resolve, 100))
+}
+const lateLedger = await call2({ action: 'usage' })
+check('a backend that appears after apply still gets its logs counted',
+  lateLedger.body?.value?.models?.find(entry => entry.model === 'late-model')?.uses === 1,
+  `models=${lateLedger.body?.value?.models?.map(e => `${e.model}:${e.uses}`).join(',')}`)
 
 rmSync(HOME, { recursive: true, force: true })
 const failed = results.filter(r => !r.passed)

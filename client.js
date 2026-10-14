@@ -96,6 +96,13 @@ window.__ModuleLoader__.load({
         resetUsage: 'Clear usage',
         resetUsageTitle: 'Deletes the locally recorded usage counters. This cannot be undone.',
         usageCleared: 'Usage counters cleared.',
+        scanHistory: 'Scan history',
+        scanHistoryTitle: 'Counts the session logs already on disk, so models you have been using start at their real level instead of level 1. Runs in the background and resumes if it is interrupted.',
+        seedWaiting: 'History scan: waiting for the session service.',
+        seedRunning: 'History scan: reading your session logs…',
+        seedDone: 'History scan: {n} model response(s) counted from {s} session(s).',
+        seedEmpty: 'History scan: nothing new to count.',
+        seedFailed: 'History scan stopped: {reason}',
         pickerTitle: 'Model',
         search: 'Search models',
         noModels: 'No models matched.',
@@ -156,6 +163,13 @@ window.__ModuleLoader__.load({
         resetUsage: '清空使用统计',
         resetUsageTitle: '删除本地记录的使用统计，无法撤销。',
         usageCleared: '使用统计已清空。',
+        scanHistory: '扫描历史',
+        scanHistoryTitle: '统计磁盘上已有的会话日志，让你一直在用的模型从真实等级开始，而不是从 1 级。后台运行，可续跑。',
+        seedWaiting: '历史扫描：正在等待会话服务。',
+        seedRunning: '历史扫描：正在读取会话日志…',
+        seedDone: '历史扫描：从 {s} 个会话中统计到 {n} 次模型响应。',
+        seedEmpty: '历史扫描：没有新的可统计内容。',
+        seedFailed: '历史扫描中断：{reason}',
         pickerTitle: '模型',
         search: '搜索模型',
         noModels: '没有匹配的模型。',
@@ -611,6 +625,18 @@ window.__ModuleLoader__.load({
         seeded: sum.seeded || row.usage.seeded,
       }), { uses: 0, tokens: 0, seeded: false }), [usageRows])
 
+      // What the one historical pass did, as the Host last reported it: absent
+      // until the query service appears, then its summary or its failure reason.
+      const seedState = (snap && snap.usage && snap.usage.seed) || null
+      const seedLine = useMemo(() => {
+        if (seedState === null) return t('seedWaiting')
+        if (seedState.ok !== true) return t('seedFailed').replace('{reason}', String(seedState.reason === undefined ? '' : seedState.reason))
+        if (seedState.counted > 0) {
+          return t('seedDone').replace('{n}', String(seedState.counted)).replace('{s}', String(seedState.scanned))
+        }
+        return t('seedEmpty')
+      }, [seedState, t])
+
       // Pinned, then favorites, then flagged rows, then the rest: the panel's
       // first screen is the part that needs a decision. The usage orderings are
       // opt-in so the default view stays the one the panel was designed around.
@@ -845,6 +871,26 @@ window.__ModuleLoader__.load({
               onClick: () => setExpanded(value => !value),
             }, expanded ? t('showFewer') : `${t('showAll')} (${ordered.length})`)
             : null,
+          // The backfill is background work, and on a fresh profile it is the only
+          // thing standing between an empty roster and a real one. Saying where the
+          // pass stands keeps a slow scan from looking like a dead feature — and a
+          // failed pass has to be visible, or it is indistinguishable from "there
+          // was nothing to count", which is exactly how this looked when it broke.
+          (snap && snap.usage && snap.usage.seedEnabled === false)
+            ? null
+            : (pending === 'seed-usage' || usageTotals.uses === 0 || (seedState !== null && seedState.ok !== true))
+              ? h('div', { className: 'llmm-hint' }, seedLine)
+              : null,
+          // Reachable even when nothing is counted yet — especially then, because
+          // that is exactly when someone wants their existing history folded in.
+          h('button', {
+            type: 'button',
+            className: 'llmm-btn',
+            style: { marginTop: '6px' },
+            title: t('scanHistoryTitle'),
+            disabled: pending === 'seed-usage',
+            onClick: () => { run('seed-usage', { action: 'seed-usage', route }) },
+          }, t('scanHistory')),
           // Deleting the counters must be reachable without hunting for a file,
           // and it is confirmed because it cannot be undone.
           usageTotals.uses > 0

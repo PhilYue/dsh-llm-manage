@@ -82,6 +82,22 @@ const SEED_SESSION_LIMIT = 300
 /** Upper bound on remembered backfilled session ids, so the watermark cannot grow forever. */
 const SEED_MARK_LIMIT = 2000
 
+/**
+ * How long one backfill pass may read logs before it yields.
+ *
+ * Replay-validating a large corpus is disk-heavy, and this pass competes with the
+ * session the user is actually using. Each session is marked as it is counted, so
+ * yielding costs nothing: the next pass skips what is already done and continues
+ * from there.
+ */
+const SEED_BUDGET_MS = 20000
+
+/** Pause between backfill passes, so history reads yield to the live session. */
+const SEED_RETRY_MS = 3000
+
+/** Hard cap on passes in one backfill run, as a backstop against a growing corpus. */
+const SEED_MAX_PASSES = 40
+
 /** How long a model marked quota-exhausted is skipped by the fallback chain. */
 const QUOTA_COOLDOWN_MS = 30 * 60 * 1000
 
@@ -762,6 +778,9 @@ export function apply(ctx, rawConfig) {
    */
   const countedUsage = new Set()
 
+  /** Whether the one startup backfill has been started, so a re-registered service cannot start it twice. */
+  let seedStarted = false
+
   /** A zeroed counter in the stored shape. */
   function blankUsage() {
     return { uses: 0, attempts: 0, in: 0, out: 0, firstAt: 0, lastAt: 0, seededAt: 0, days: {} }
@@ -1030,10 +1049,15 @@ export function apply(ctx, rawConfig) {
     let scanned = 0
     let counted = 0
     let skipped = 0
+    let budgetExhausted = false
+    const deadline = Date.now() + SEED_BUDGET_MS
     for (const record of records.slice(0, SEED_SESSION_LIMIT)) {
       const sessionId = record?.header?.id
       if (sessionId === undefined) continue
       if (already[sessionId] !== undefined) { skipped += 1; continue }
+      // Checked only where the pass actually blocks on a log read, so a corpus
+      // that is already counted runs to completion however large it is.
+      if (Date.now() > deadline) { budgetExhausted = true; break }
       let log
       try {
         log = await query.readSession(sessionId)
@@ -1053,7 +1077,41 @@ export function apply(ctx, rawConfig) {
       }))
     }
     await flushUsage()
-    return { ok: true, sessions: records.length, scanned, skipped, counted }
+    return { ok: true, sessions: records.length, scanned, skipped, counted, budgetExhausted }
+  }
+
+  /**
+   * Run backfill passes until the corpus is covered.
+   *
+   * One pass is bounded in time, so a large corpus finishes over several passes
+   * instead of stalling the first one. Each pass marks what it counted, so the
+   * sequence always terminates: every pass either advances the watermark or finds
+   * nothing left. The pass count is capped as a backstop against a corpus that
+   * keeps growing faster than it can be read.
+   * @param {object | undefined} query - the `sessionQuery` service.
+   * @returns {Promise<object>} the aggregated summary.
+   */
+  async function seedUsageAll(query) {
+    let passes = 0
+    let scanned = 0
+    let skipped = 0
+    let counted = 0
+    let sessions = 0
+    for (;;) {
+      const result = await seedUsage(query)
+      if (result.ok !== true) return result
+      sessions = Math.max(sessions, result.sessions ?? 0)
+      scanned += result.scanned ?? 0
+      skipped += result.skipped ?? 0
+      counted += result.counted ?? 0
+      passes += 1
+      if (result.budgetExhausted !== true || passes >= SEED_MAX_PASSES) {
+        return { ok: true, sessions, scanned, skipped, counted, passes, budgetExhausted: result.budgetExhausted === true }
+      }
+      // Yield between passes so reading history never monopolizes the disk the
+      // live session is writing to.
+      await new Promise(resolve => { const timer = setTimeout(resolve, SEED_RETRY_MS); timer.unref?.() })
+    }
   }
 
   /**
@@ -1401,7 +1459,16 @@ export function apply(ctx, rawConfig) {
       revision: await store.read('__global__').then(overlay => overlay.revision),
       selectorMode: config.selector.mode,
       fallbackEnabled: config.fallback.enabled,
-      usage: { enabled: config.usage.enabled, top: usageTop, totals: usageTotals },
+      usage: {
+        enabled: config.usage.enabled,
+        top: usageTop,
+        totals: usageTotals,
+        // `seedEnabled` is separate from `seed` because "no backfill was asked
+        // for" and "the backfill has not reported yet" are different states, and
+        // collapsing them would show a progress line for a pass that never runs.
+        seedEnabled: config.usage.enabled && config.usage.seed,
+        seed: diagnostics.usageSeed ?? null,
+      },
       groups: merged,
       directory: [...directories.entries()].map(([route, value]) => ({
         route,
@@ -1598,10 +1665,27 @@ export function apply(ctx, rawConfig) {
     // One historical pass, so an existing user does not begin at level 1 on
     // every model. It is background work: no request and no panel read waits
     // for it, and it resumes rather than recounting if it is interrupted.
+    //
+    // The query backend is awaited through `ctx.inject` instead of being sampled
+    // with `ctx.get` while this plugin applies. Registration order is not
+    // guaranteed, and a backend that registered later left the whole pass
+    // answering "not available" while writing nothing at all — a silent no-op
+    // that looked like an empty history. `inject` fires whenever the service
+    // appears, so a slow host still gets its backfill, and a host without a
+    // query backend simply never runs one.
     if (config.usage.seed) {
-      void seedUsage()
-        .then((result) => { diagnostics.usageSeed = result })
-        .catch(() => {})
+      diagnostics.usageSeed = { ok: false, reason: 'waiting for the sessionQuery service' }
+      ctx.inject(['sessionQuery'], (scope) => {
+        if (seedStarted) return
+        seedStarted = true
+        void seedUsageAll(scope.sessionQuery)
+          .then((result) => { diagnostics.usageSeed = result })
+          .catch((error) => {
+            // Recorded rather than discarded: a pass that fails must be visible
+            // in `diagnostics`, not indistinguishable from one that found nothing.
+            diagnostics.usageSeed = { ok: false, reason: error instanceof Error ? error.message : String(error) }
+          })
+      })
     }
   }
 
@@ -1694,7 +1778,7 @@ export function apply(ctx, rawConfig) {
             return JSON.stringify(await usageReport(), null, 2)
           }
           case 'seed-usage': {
-            const result = await seedUsage()
+            const result = await seedUsageAll()
             diagnostics.usageSeed = result
             return JSON.stringify(result, null, 2)
           }
@@ -1773,7 +1857,7 @@ export function apply(ctx, rawConfig) {
             case 'usage':
               return json({ ok: true, value: await usageReport() })
             case 'seed-usage': {
-              const result = await seedUsage()
+              const result = await seedUsageAll()
               diagnostics.usageSeed = result
               return json({ ok: true, value: result, snapshot: await snapshot() })
             }
