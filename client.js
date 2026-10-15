@@ -96,6 +96,7 @@ window.__ModuleLoader__.load({
         sectionPinned: 'Pinned',
         sectionFavorites: 'Favorites',
         sectionFrequent: 'Most used',
+        sectionHidden: 'Hidden',
         level: 'level',
         levelShort: 'Lv',
         usesLabel: 'uses',
@@ -195,6 +196,7 @@ window.__ModuleLoader__.load({
         sectionPinned: '置顶',
         sectionFavorites: '收藏',
         sectionFrequent: '常用',
+        sectionHidden: '已隐藏',
         level: '熟练度',
         levelShort: 'Lv',
         usesLabel: '次调用',
@@ -412,6 +414,56 @@ window.__ModuleLoader__.load({
       }, h(Icon, { name: busy ? 'spinner' : props.icon, spin: busy, filled: props.filled }))
     }
 
+    /**
+     * The full record behind one model row, as label/value pairs.
+     *
+     * Shared by the panel and the picker deliberately: both surfaces show the same
+     * row, so they must describe it in the same words. It renders only what the
+     * Host actually reported — an absent value leaves no field behind rather than
+     * an empty one, so a row with no usage does not claim a level of 0.
+     *
+     * @param {object} props - `{ row }`, the Host's own row plus its usage.
+     * @returns {object} the detail element.
+     */
+    function ModelDetail(props) {
+      const row = props.row
+      const usage = row.usage === null || row.usage === undefined || row.usage.uses <= 0 ? null : row.usage
+      /** One labelled field; absent values render nothing. */
+      const field = (label, value) => (value === null || value === undefined || value === '')
+        ? null
+        : h('div', { className: 'llmm-field' },
+          h('span', { className: 'llmm-field-label' }, label),
+          h('span', { className: 'llmm-field-value' }, value))
+      return h('div', { className: 'llmm-detail' },
+        field(t('detailStatus'), statusLabel(row.status)),
+        field(t('detailReason'), row.reason),
+        field(t('detailSource'), sourceLabel(row.source)),
+        field(t('detailChecked'), row.at > 0 ? ageOf(row.at) : null),
+        field(t('detailDirectory'), row.inDirectory === true ? t('detailListed') : t('detailMissing')),
+        usage !== null
+          ? field(t('detailLevel'), `${t('levelShort')}.${usage.level}`
+            + (usage.nextAt > 0 ? ` · ${t('detailNextLevel')} ${usage.nextAt}` : ''))
+          : null,
+        // A bar rather than a percentage: the question is "how far to the next
+        // level", which is a distance, not a score.
+        usage !== null
+          ? h('div', { className: 'llmm-field' },
+            h('span', { className: 'llmm-field-label' }, t('detailProgress')),
+            h('div', { className: 'llmm-bar llmm-bar-field' },
+              h('div', { className: 'llmm-bar-fill', style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` } })))
+          : null,
+        usage !== null ? field(t('detailUses'), String(usage.uses)) : null,
+        usage !== null ? field(t('detailRecent7'), String(usage.recent7)) : null,
+        usage !== null ? field(t('detailPrior7'), String(usage.prior7)) : null,
+        usage !== null && typeof usage.heat === 'number' ? field(t('detailHeat'), usage.heat.toFixed(1)) : null,
+        usage !== null && usage.firstAt > 0 ? field(t('detailFirstUsed'), ageOf(usage.firstAt)) : null,
+        usage !== null && usage.lastAt > 0 ? field(t('detailLastUsed'), ageOf(usage.lastAt)) : null,
+        usage !== null ? field(t('detailTokens'), `${usage.inputTokens} / ${usage.outputTokens}`) : null,
+        usage !== null ? field(t('detailOrigin'), usage.seeded ? t('detailOriginSeeded') : t('detailOriginLive')) : null,
+        row.alsoOn && row.alsoOn.length > 0 ? field(t('detailAlsoOn'), row.alsoOn.join(', ')) : null,
+      )
+    }
+
     /** Stylesheet text shared by all three contributions, built from theme tokens only. */
     const CSS = `
 .llmm-root{font-size:14px;color:var(--dsw-alias-label-primary)}
@@ -593,6 +645,25 @@ window.__ModuleLoader__.load({
    md radius, 13/18 text. This card replaces that picker, so it should measure the
    same as the thing it replaces. */
 .llmm-item{display:flex;align-items:center;gap:6px;box-sizing:border-box;width:auto;min-width:100%;min-height:34px;padding:5px 7px;border:0;border-radius:var(--dsw-radius-md);background:transparent;color:inherit;font:inherit;font-size:13px;line-height:18px;text-align:left;cursor:pointer;outline:none}
+/* The row is a wrapper now: it holds two controls, the selection target and the
+   disclosure. Selection keeps the shipped option's own box, so the row still
+   measures like the picker it replaces. */
+.llmm-item-select{display:flex;align-items:center;gap:6px;flex:1;min-width:0;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-size:13px;line-height:18px;text-align:left;cursor:pointer;outline:none}
+/* Keyboard focus is indicated by the row fill, as the design system does for its
+   menu items — the fill has to come from the row, because the focused control is
+   inside it. */
+.llmm-item:focus-within{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-item-select:focus-visible{outline:none}
+/* The action block. The chevron is one glyph; these carry labels, because four
+   icon-only actions in a 240px menu is a guessing game. */
+.llmm-acts{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
+.llmm-act{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
+.llmm-act:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.llmm-act:disabled{opacity:.55;cursor:default}
+.llmm-act-on{border-color:var(--dsw-alias-brand-primary,var(--dsw-alias-border-l3));color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary))}
+.llmm-act-danger{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+/* The block belongs to the row above it, so it is indented to the name. */
+.llmm-detail-pick{margin:0 0 4px 26px}
 .llmm-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
 /* Keyboard focus is the same fill the pointer gets: the fill IS the row's focus
    indication, and a default ring on top of it would double the signal. */
@@ -1009,12 +1080,6 @@ window.__ModuleLoader__.load({
               const why = row.reason !== ''
                 ? `${row.reason} · ${sourceLabel(row.source)} · ${ageOf(row.at)}`
                 : `${statusLabel(row.status)} · ${sourceLabel(row.source)}`
-              /** One labelled field of the detail block; absent values render nothing. */
-              const field = (label, value) => (value === null || value === undefined || value === '')
-                ? null
-                : h('div', { className: 'llmm-field' },
-                  h('span', { className: 'llmm-field-label' }, label),
-                  h('span', { className: 'llmm-field-value' }, value))
               return h(React.Fragment, { key },
                 h('div', {
                   className: `llmm-row${row.hidden ? ' llmm-hidden' : ''}${density === 'comfortable' ? ' llmm-loose' : ''}`,
@@ -1090,34 +1155,7 @@ window.__ModuleLoader__.load({
                 // demand. A hover tooltip was the alternative and it is the weaker
                 // one: it needs a pointer, cannot be read on a touch screen, and
                 // cannot be held open beside a second row to compare.
-                open
-                  ? h('div', { className: 'llmm-detail' },
-                    field(t('detailStatus'), statusLabel(row.status)),
-                    field(t('detailReason'), row.reason),
-                    field(t('detailSource'), sourceLabel(row.source)),
-                    field(t('detailChecked'), row.at > 0 ? ageOf(row.at) : null),
-                    field(t('detailDirectory'), row.inDirectory === true ? t('detailListed') : t('detailMissing')),
-                    usage !== null
-                      ? field(t('detailLevel'), `${t('levelShort')}.${usage.level}`
-                        + (usage.nextAt > 0 ? ` · ${t('detailNextLevel')} ${usage.nextAt}` : ''))
-                      : null,
-                    usage !== null
-                      ? h('div', { className: 'llmm-field' },
-                        h('span', { className: 'llmm-field-label' }, t('detailProgress')),
-                        h('div', { className: 'llmm-bar llmm-bar-field' },
-                          h('div', { className: 'llmm-bar-fill', style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` } })))
-                      : null,
-                    usage !== null ? field(t('detailUses'), String(usage.uses)) : null,
-                    usage !== null ? field(t('detailRecent7'), String(usage.recent7)) : null,
-                    usage !== null ? field(t('detailPrior7'), String(usage.prior7)) : null,
-                    usage !== null && typeof usage.heat === 'number' ? field(t('detailHeat'), usage.heat.toFixed(1)) : null,
-                    usage !== null && usage.firstAt > 0 ? field(t('detailFirstUsed'), ageOf(usage.firstAt)) : null,
-                    usage !== null && usage.lastAt > 0 ? field(t('detailLastUsed'), ageOf(usage.lastAt)) : null,
-                    usage !== null ? field(t('detailTokens'), `${usage.inputTokens} / ${usage.outputTokens}`) : null,
-                    usage !== null ? field(t('detailOrigin'), usage.seeded ? t('detailOriginSeeded') : t('detailOriginLive')) : null,
-                    row.alsoOn && row.alsoOn.length > 0 ? field(t('detailAlsoOn'), row.alsoOn.join(', ')) : null,
-                  )
-                  : null,
+                open ? h(ModelDetail, { row }) : null,
               )
             }),
             rows.length === 0 && !busy ? h('div', { className: 'llmm-empty' }, t('noModels')) : null,
@@ -1208,6 +1246,17 @@ window.__ModuleLoader__.load({
       // opt-in, exactly like the panel's, so opening the picker does not
       // reshuffle a list the user has muscle memory for.
       const [sortMode, setSortMode] = useState('default')
+      // Which rows have their action/record block open, plus the one action in
+      // flight, so a click answers immediately and cannot be double-fired.
+      const [detailKeys, setDetailKeys] = useState(() => new Set())
+      const [pending, setPending] = useState('')
+      // Section membership as it was when this menu opened, captured at the first
+      // pin or favorite. Pinning otherwise lifts a row out of its route group into
+      // a section at the top — a bigger jump than the panel's, and the one thing
+      // this menu must not do while the user is choosing from it. Only
+      // pinned/favorite are frozen: hidden stays live, because hiding a row is
+      // meant to make it leave.
+      const [frozenFlags, setFrozenFlags] = useState(null)
       const triggerRef = useRef(null)
       const menuRef = useRef(null)
 
@@ -1279,34 +1328,38 @@ window.__ModuleLoader__.load({
       // model of every alphabetically-earlier route — which is the scrolling the
       // sections exist to remove.
       const catalogue = useMemo(() => {
-        if (snap !== null) {
-          return snap.groups.map(group => ({
+        const live = snap !== null
+          ? snap.groups.map(group => ({
             route: group.route,
             name: group.name,
-            rows: group.rows
-              .filter(row => !row.hidden)
-              .map(row => ({
-                route: row.route,
-                model: row.model,
-                pinned: row.pinned === true,
-                favorite: row.favorite === true,
-                // Carried through so the menu can show proficiency and lift the
-                // most-used models. Defaulted here rather than at each use site,
-                // because the shipped-directory fallback below has no usage at all.
-                usage: row.usage ?? null,
-              })),
+            // The whole Host row is carried, not a reduced projection: the action
+            // block shows the same record the panel does, and that record is the
+            // Host's own status/reason/source/timestamps. Hidden rows are kept
+            // here and filtered by the sections, so the menu can also offer them
+            // back — filtering them out at this point is what made hiding a
+            // one-way door.
+            rows: group.rows.map(row => ({
+              ...row,
+              route: row.route,
+              model: row.model,
+              pinned: row.pinned === true,
+              favorite: row.favorite === true,
+              hidden: row.hidden === true,
+              status: row.status ?? 'unknown',
+              usage: row.usage ?? null,
+            })),
           }))
-        }
-        const source = state && Array.isArray(state.groups) ? state.groups : []
-        // The shipped directory carries no overlay, so nothing can be lifted:
-        // without the Host there is no way to know what is pinned or favorited.
-        return source.map(group => ({
-          route: group.id,
-          name: group.name,
-          rows: group.models.map(model => ({
-            route: group.id, model: model.id, pinned: false, favorite: false, usage: null,
-          })),
-        }))
+          // The shipped directory carries no overlay, so nothing can be lifted:
+          // without the Host there is no way to know what is pinned or favorited.
+          : (state && Array.isArray(state.groups) ? state.groups : []).map(group => ({
+            route: group.id,
+            name: group.name,
+            rows: group.models.map(model => ({
+              route: group.id, model: model.id, pinned: false, favorite: false,
+              hidden: false, status: 'unknown', usage: null,
+            })),
+          }))
+        return live
       }, [snap, state])
 
       /**
@@ -1324,14 +1377,26 @@ window.__ModuleLoader__.load({
         const matches = (row) => needle === '' || row.model.toLowerCase().includes(needle)
         const pinned = []
         const favorites = []
+        const hidden = []
         const byRoute = new Map()
+        // Which section a row BELONGS to is frozen; what the row itself reports
+        // is not. Rewriting the row's own flags would have frozen the pin icon
+        // too, so the button could never light up and the menu would claim the
+        // click did nothing.
+        const flagsOf = (row) => (frozenFlags === null
+          ? { pinned: row.pinned, favorite: row.favorite }
+          : frozenFlags.get(`${row.route}/${row.model}`) ?? { pinned: row.pinned, favorite: row.favorite })
         for (const group of catalogue) {
-          const rows = group.rows.filter(matches)
+          // Hidden models leave the menu — that is what hiding means — but they
+          // are collected rather than dropped, so the menu can offer them back.
+          const rows = group.rows.filter(row => !row.hidden && matches(row))
           byRoute.set(group.route, rows)
           for (const row of rows) {
-            if (row.pinned) pinned.push(row)
-            else if (row.favorite) favorites.push(row)
+            const flags = flagsOf(row)
+            if (flags.pinned) pinned.push(row)
+            else if (flags.favorite) favorites.push(row)
           }
+          for (const row of group.rows) if (row.hidden && matches(row)) hidden.push(row)
         }
         const lifted = new Set([...pinned, ...favorites].map(row => `${row.route}/${row.model}`))
         // Frequently used models, most-used first, so a model the user works with
@@ -1364,8 +1429,8 @@ window.__ModuleLoader__.load({
             rows: (byRoute.get(group.route) ?? []).filter(row => !lifted.has(`${group.route}/${row.model}`)),
           }))
           .filter(group => group.rows.length > 0)
-        return { pinned, favorites, frequent: frequentTop, groups }
-      }, [catalogue, query])
+        return { pinned, favorites, frequent: frequentTop, groups, hidden }
+      }, [catalogue, query, frozenFlags])
 
       /**
        * Whether a lifted section mixes routes, and so has to name them.
@@ -1405,6 +1470,71 @@ window.__ModuleLoader__.load({
           return uses !== 0 ? uses : left.model.localeCompare(right.model)
         })
       }
+
+      /**
+       * Freeze section membership at its current state, once.
+       *
+       * Called before a pin or a favorite changes which section a row belongs to.
+       * Only pinned/favorite are captured: `hidden` stays live, so hiding a row
+       * still removes it — that is the whole point of hiding, and an unhidden row
+       * returns to the section its frozen flags place it in.
+       */
+      const freezeSections = useCallback(() => {
+        setFrozenFlags((current) => {
+          if (current !== null) return current
+          const flags = new Map()
+          for (const group of catalogue) {
+            for (const row of group.rows) {
+              flags.set(`${row.route}/${row.model}`, { pinned: row.pinned, favorite: row.favorite })
+            }
+          }
+          return flags
+        })
+      }, [catalogue])
+
+      /**
+       * Flip one overlay list for one row, folding the Host's snapshot back in.
+       *
+       * The returned snapshot is applied rather than re-fetched: this menu reads
+       * its own snapshot once on mount, so without folding the answer back the row
+       * would keep showing the state the click just replaced.
+       *
+       * @param {object} row - the row.
+       * @param {string} list - 'pins' | 'favorites' | 'hidden'.
+       * @param {boolean} on - the desired membership.
+       * @returns {Promise<void>} fulfillment once the UI updated.
+       */
+      const mutate = useCallback(async (row, list, on) => {
+        const key = `${list}:${row.route}/${row.model}`
+        if (list !== 'hidden') freezeSections()
+        setPending(key)
+        try {
+          const data = await callHost({ action: 'toggle', route: row.route, model: row.model, list, on })
+          if (data.snapshot !== undefined) setSnap(data.snapshot)
+        } catch { /* leave the menu usable; the row keeps the state it had */ } finally {
+          setPending('')
+        }
+      }, [freezeSections])
+
+      /**
+       * Deep-probe one model, folding the result back in.
+       *
+       * The probe outlives the menu — its result lands in the persisted health
+       * record, so it is still there next time even if this menu closes first.
+       *
+       * @param {object} row - the row.
+       * @returns {Promise<void>} fulfillment once the probe answered.
+       */
+      const probe = useCallback(async (row) => {
+        const key = `probe:${row.route}/${row.model}`
+        setPending(key)
+        try {
+          const data = await callHost({ action: 'probe', route: row.route, model: row.model })
+          if (data.snapshot !== undefined) setSnap(data.snapshot)
+        } catch { /* leave the menu usable */ } finally {
+          setPending('')
+        }
+      }, [])
 
       const choose = useCallback(async (row) => {
         setFailure('')
@@ -1449,52 +1579,104 @@ window.__ModuleLoader__.load({
         // Only a model that has actually been used earns a chip: a row of "Lv.1"
         // badges on an untouched catalogue is noise, not information.
         const leveled = usage !== null && usage !== undefined && usage.uses > 0
-        return h('button', {
-          key: `${row.route}/${row.model}`,
+        const key = `${row.route}/${row.model}`
+        const expanded = detailKeys.has(key)
+        const act = (icon, label, active, on, pendingKey, danger) => h('button', {
           type: 'button',
-          className: `llmm-item${active ? ' llmm-active' : ''}${down ? ' llmm-down' : ''}`,
-          // The same figures the panel's row explains, so a model is described
-          // once and read the same way wherever it appears.
-          title: leveled
-            ? `${t('level')} ${usage.level} · ${usage.uses} ${t('usesLabel')}`
-              + (usage.nextAt > 0 ? ` · ${t('level')} ${usage.level + 1} @ ${usage.nextAt}` : '')
-              + ` · ${usage.inputTokens}/${usage.outputTokens} ${t('tokensLabel')}`
-              + (usage.seeded ? ` · ${t('seededNote')}` : '')
-              + ` · ${t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`)}`
-            : (overlayRow && overlayRow.reason ? overlayRow.reason : statusLabel(status)),
-          onClick: () => { choose(row) },
-        },
-          h('span', { className: `llmm-dot ${statusTone(status)}` }),
-          h('span', { className: 'llmm-name' }, row.model),
-          down ? h('span', { className: 'llmm-chip' }, statusLabel(status)) : null,
-          // Proficiency sits next to the name, on the same line as the other
-          // chips, so the menu reads the same way as the panel.
-          leveled ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(usage.level, 7)}` },
-            `${t('levelShort')}.${usage.level}`) : null,
-          // The trailing count is what makes the arrow mean something: "busier"
-          // without a number cannot be told apart from one extra request. A model
-          // idle for a week keeps its level but shows no trend, because there is
-          // no recent use to report either way.
-          leveled && usage.recent7 > 0
-            ? h('span', {
-              className: `llmm-trend llmm-trend-${usage.trend}`,
-              title: t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`),
-            }, `${usage.trend === 'up' ? '↑' : usage.trend === 'down' ? '↓' : '→'}${usage.recent7}`)
-            : null,
-          // The route chip takes the panel's "also on" slot: the same kind of
-          // annotation, pushed to the right edge by its own margin.
-          showRoute ? h('span', { className: 'llmm-chip llmm-route' }, row.route) : null,
-          active ? h('span', { className: 'llmm-chip' }, t('selected')) : null,
-          // The lifted section is where the day-to-day models live, so it is the
-          // one place worth the space of a distance-to-next-level bar: the same
-          // question the panel's hero card answers, on the surface where the
-          // model is actually chosen.
-          hero && leveled
-            ? h('span', { className: 'llmm-item-bar', 'aria-hidden': true },
-              h('span', {
-                className: 'llmm-item-bar-fill',
-                style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` },
-              }))
+          className: `llmm-act${active ? ' llmm-act-on' : ''}${danger === true ? ' llmm-act-danger' : ''}`,
+          'aria-pressed': active ? 'true' : undefined,
+          disabled: pending === pendingKey,
+          onClick: on,
+        }, h(Icon, { name: pending === pendingKey ? 'spinner' : icon, spin: pending === pendingKey, filled: active }),
+        h('span', null, pending === pendingKey && pendingKey.startsWith('probe:') ? t('probing') : label))
+        const toggleDetail = () => setDetailKeys((currentKeys) => {
+          const next = new Set(currentKeys)
+          if (next.has(key)) next.delete(key)
+          else next.add(key)
+          return next
+        })
+        // The row is no longer the button. A button cannot contain buttons: the
+        // action block needs four of them, and nesting them inside the selection
+        // target would be invalid markup whose clicks also selected the model.
+        // Selection therefore keeps its own button and the row wraps both.
+        return h(React.Fragment, { key },
+          h('div', {
+            className: `llmm-item${active ? ' llmm-active' : ''}${down ? ' llmm-down' : ''}`,
+          },
+            h('button', {
+              type: 'button',
+              className: 'llmm-item-select',
+              // The same figures the panel's row explains, so a model is described
+              // once and read the same way wherever it appears.
+              title: leveled
+                ? `${t('level')} ${usage.level} · ${usage.uses} ${t('usesLabel')}`
+                  + (usage.nextAt > 0 ? ` · ${t('level')} ${usage.level + 1} @ ${usage.nextAt}` : '')
+                  + ` · ${usage.inputTokens}/${usage.outputTokens} ${t('tokensLabel')}`
+                  + (usage.seeded ? ` · ${t('seededNote')}` : '')
+                  + ` · ${t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`)}`
+                : (row.reason ? row.reason : statusLabel(status)),
+              onClick: () => { choose(row) },
+            },
+              h('span', { className: `llmm-dot ${statusTone(status)}` }),
+              h('span', { className: 'llmm-name' }, row.model),
+              down ? h('span', { className: 'llmm-chip' }, statusLabel(status)) : null,
+              // Proficiency sits next to the name, on the same line as the other
+              // chips, so the menu reads the same way as the panel.
+              leveled ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(usage.level, 7)}` },
+                `${t('levelShort')}.${usage.level}`) : null,
+              // The trailing count is what makes the arrow mean something: "busier"
+              // without a number cannot be told apart from one extra request. A model
+              // idle for a week keeps its level but shows no trend, because there is
+              // no recent use to report either way.
+              leveled && usage.recent7 > 0
+                ? h('span', {
+                  className: `llmm-trend llmm-trend-${usage.trend}`,
+                  title: t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`),
+                }, `${usage.trend === 'up' ? '↑' : usage.trend === 'down' ? '↓' : '→'}${usage.recent7}`)
+                : null,
+              // The route chip takes the panel's "also on" slot: the same kind of
+              // annotation, pushed to the right edge by its own margin.
+              showRoute ? h('span', { className: 'llmm-chip llmm-route' }, row.route) : null,
+              active ? h('span', { className: 'llmm-chip' }, t('selected')) : null,
+              // The lifted section is where the day-to-day models live, so it is the
+              // one place worth the space of a distance-to-next-level bar: the same
+              // question the panel's hero card answers, on the surface where the
+              // model is actually chosen.
+              hero && leveled
+                ? h('span', { className: 'llmm-item-bar', 'aria-hidden': true },
+                  h('span', {
+                    className: 'llmm-item-bar-fill',
+                    style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` },
+                  }))
+                : null,
+            ),
+            h('button', {
+              type: 'button',
+              className: `llmm-chevron${expanded ? ' llmm-chevron-open' : ''}`,
+              'aria-expanded': expanded,
+              'aria-label': expanded ? t('collapseRow') : t('expandRow'),
+              title: expanded ? t('collapseRow') : t('expandRow'),
+              onClick: toggleDetail,
+            }, expanded ? '▾' : '▸'),
+          ),
+          // The actions and the record, on demand. The menu's width belongs to the
+          // model name, so neither can be always-on; a chevron costs one glyph and
+          // keeps every action reachable by pointer, keyboard and touch.
+          expanded
+            ? h('div', { className: 'llmm-detail llmm-detail-pick' },
+              h('div', { className: 'llmm-acts' },
+                act('pin', row.pinned ? t('unpin') : t('pin'), row.pinned,
+                  () => mutate(row, 'pins', !row.pinned), `pins:${key}`),
+                act('star', row.favorite ? t('unfavorite') : t('favorite'), row.favorite,
+                  () => mutate(row, 'favorites', !row.favorite), `favorites:${key}`),
+                act(row.hidden ? 'eyeOff' : 'eye', row.hidden ? t('unhide') : t('hide'), row.hidden,
+                  () => mutate(row, 'hidden', !row.hidden), `hidden:${key}`),
+                act('pulse', t('probe'), false, () => probe(row), `probe:${key}`, isProblem(status)),
+              ),
+              // The same record the panel shows, from the same component: one
+              // description of a model, not two that can drift apart.
+              h(ModelDetail, { row }),
+            )
             : null,
         )
       }
@@ -1565,6 +1747,12 @@ window.__ModuleLoader__.load({
           sections.groups.map(group => renderSection(
             group.route, group.name || group.route, orderRows(group.rows),
           )),
+          // Hidden models last, and offered back. Without this section hiding from
+          // the picker would be a one-way door: the row leaves the menu and the
+          // only way to undo it is the settings page.
+          sections.hidden.length > 0
+            ? renderSection('llmm-hidden', t('sectionHidden'), orderRows(sections.hidden))
+            : null,
         ),
         // The sort control earns its place only once there is usage to sort by;
         // on a fresh profile it would offer three orderings that all look alike.
@@ -1577,7 +1765,9 @@ window.__ModuleLoader__.load({
                 type: 'button',
                 className: `llmm-sortbtn${sortMode === mode ? ' llmm-sortbtn-on' : ''}`,
                 'aria-pressed': sortMode === mode,
-                onClick: () => setSortMode(mode),
+                // Reordering is what the user asked for here, so a pending pin is
+                // allowed to settle at the same time.
+                onClick: () => { setFrozenFlags(null); setSortMode(mode) },
               }, t(mode === 'default' ? 'sortDefault' : mode === 'level' ? 'sortLevel' : 'sortHeat'))),
             ),
           )
@@ -1594,7 +1784,14 @@ window.__ModuleLoader__.load({
             className: `llmm-trigger${locked ? ' llmm-locked' : ''}`,
             disabled: locked,
             title: triggerLabel,
-            onClick: () => setOpen(value => !value),
+            // Reopening is the boundary that settles the order: the pins set while
+            // the last menu was open are applied here, so the freeze never holds a
+            // stale section layout longer than the menu it belongs to.
+            onClick: () => {
+              setFrozenFlags(null)
+              setDetailKeys((currentKeys) => (currentKeys.size === 0 ? currentKeys : new Set()))
+              setOpen(value => !value)
+            },
           },
             h('span', { className: 'llmm-trigger-label' }, triggerLabel),
             h('span', { 'aria-hidden': true }, '▾'),

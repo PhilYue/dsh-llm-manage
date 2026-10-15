@@ -323,8 +323,9 @@ The picker opens on **Pinned**, then **Favorites**, then **Most used**, then one
 route. Pins and favorites are lifted *out* of their route and shown once, at the top, so a
 favorite is one click away no matter how many routes the profile has or how many models sit
 ahead of it alphabetically. Below the sections, each route still lists everything else, minus
-the rows already lifted — every listed model is offered exactly once, and hidden models are
-not offered at all.
+the rows already lifted — every listed model is offered exactly once. Hidden models are not
+selectable, but they are not discarded either: they collect in a **Hidden** section at the
+bottom, which is the only place the menu can offer them back.
 
 A model that is both pinned and favorited appears under **Pinned** only, matching the
 fallback chain's own precedence, where a pin outranks a favorite.
@@ -365,6 +366,36 @@ outside the scrolling list so it stays reachable, and it exists only when there 
 sort by — on a fresh profile it would offer three orderings that all look alike. The two
 usage orderings answer different questions, and on a real profile they disagree: the model
 you have used most is often not the one you are reaching for today.
+
+#### Managing a model without leaving the conversation
+
+The picker is where you look at models most often, so the moment you notice one is unusable
+is the moment you want to act on it. Every row therefore carries a **chevron** that opens its
+management block: **pin**, **favorite**, **hide**, and **deep probe**, each with a label
+rather than a bare icon, above the same record the panel's detail block shows — the two
+surfaces render it from one component, so they cannot describe a model differently.
+
+The chevron is the whole cost of this on a row. Four always-on icon buttons would take about
+a hundred pixels from a menu that is between 240 and 420 wide, and the model name is the most
+important thing in it; they would also turn one click target into five, so a near miss on
+"select" would silently hide a model. A chevron is one glyph, and it keeps every action
+reachable by pointer, keyboard and touch — where a hover-only strip would be reachable by
+pointer only.
+
+Two consequences of putting management inside the picker are handled explicitly:
+
+- **Pinning does not move the row between sections.** Freezing matters more here than in the
+  panel, because a pin lifts a row clean out of its route group into **Pinned**. Section
+  membership is frozen at the first pin or favorite and settles when the menu is next opened;
+  what the row *reports* stays live, so the button lights up immediately. Freezing the row's
+  own flags — the first thing this did — also froze the pin indicator, and the menu claimed
+  the click had done nothing.
+- **Hiding is not a one-way door.** A hidden model leaves the menu, as hiding means it
+  should, but the menu collects hidden rows into a **Hidden** section at the bottom and offers
+  **Unhide** in the same block. Filtering hidden rows out of the catalogue entirely — the
+  original behaviour — made hiding from the picker permanent unless you went to settings.
+
+A hidden model still lists in the panel, dimmed, where the same action brings it back.
 
 The picker is styled from the panel's own vocabulary rather than as a separate design: the
 same row box (padding, radius, hover background **and** hover border), the same dimming for

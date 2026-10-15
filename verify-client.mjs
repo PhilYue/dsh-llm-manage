@@ -905,6 +905,130 @@ check('a lifted section on one route names none',
   favoriteSection.items.length > 0 && favoriteSection.items.every(row => row.route === ''),
   favoriteSection.items.map(row => `${row.name}${row.route === '' ? '' : `[${row.route}]`}`).join(', '))
 
+// ── the picker manages models, not just lists them ──────────────────────────
+// Pin, favorite, hide and probe used to be reachable only from the settings
+// page, so the moment you noticed a model was unusable — while choosing one —
+// was the moment you had to leave the conversation to act on it.
+const pickerRowFor = (name) => Array.from(pickerMenu().querySelectorAll('.llmm-item'))
+  .find(item => item.querySelector('.llmm-name')?.textContent === name)
+const chevronOf = (name) => pickerRowFor(name)?.querySelector('.llmm-chevron') ?? null
+const pickerDetailOf = (name) => {
+  const next = pickerRowFor(name)?.nextElementSibling ?? null
+  return next !== null && next.classList.contains('llmm-detail') ? next : null
+}
+// A name that appears exactly once, and that is not already lifted: the same
+// model id is served by two routes in this fixture, so a target visible twice
+// could not tell "the row moved" from "the other route's copy is still there" —
+// and a target already in Pinned could not move at all.
+const nameCounts = new Map()
+for (const section of pickerSections()) {
+  for (const item of section.items) nameCounts.set(item.name, (nameCounts.get(item.name) ?? 0) + 1)
+}
+const alreadyLifted = new Set([...(open[pinnedAt]?.items ?? []), ...(open[favoritesAt]?.items ?? []),
+  ...(open[frequentAt]?.items ?? [])].map(item => item.name))
+const manageTarget = [...nameCounts.keys()].find(name => nameCounts.get(name) === 1 && !alreadyLifted.has(name))
+check('every picker row offers a labelled disclosure', chevronOf(manageTarget) !== null
+  && /details|展开|收起/i.test(chevronOf(manageTarget).getAttribute('aria-label') ?? ''),
+  chevronOf(manageTarget)?.getAttribute('aria-label') ?? 'no chevron on the first row')
+
+// A button cannot contain buttons, so the row had to stop being one. These are
+// the two halves of that split: the selection control selects, the row does not.
+const pickerSelections = selections.length
+await act(async () => {
+  pickerRowFor(manageTarget).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await waitFor(() => true)
+})
+check('clicking the row itself does not select — only the selection control does',
+  selections.length === pickerSelections,
+  `${selections.length - pickerSelections} selection(s) from a row click`)
+
+await act(async () => {
+  chevronOf(manageTarget).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await waitFor(() => pickerDetailOf(manageTarget) !== null)
+})
+const block = pickerDetailOf(manageTarget)
+check('the disclosure opens the row\'s management block',
+  block !== null && block.querySelectorAll('.llmm-act').length === 4,
+  `${block?.querySelectorAll('.llmm-act').length ?? 0} action(s)`)
+check('the actions are labelled rather than icon-only',
+  Array.from(block?.querySelectorAll('.llmm-act') ?? [])
+    .every(button => (button.textContent ?? '').trim().length > 0),
+  Array.from(block?.querySelectorAll('.llmm-act') ?? []).map(b => b.textContent).join(' / '))
+// The block reuses the panel's own record component, so the two surfaces cannot
+// describe the same model differently.
+check('the block carries the same record the panel shows',
+  (block?.querySelectorAll('.llmm-field').length ?? 0) >= 3,
+  Array.from(block?.querySelectorAll('.llmm-field-label') ?? []).map(n => n.textContent).join(', ').slice(0, 140))
+const disclosureState = chevronOf(manageTarget).getAttribute('aria-expanded')
+check('the disclosure reports its state', disclosureState === 'true', disclosureState ?? 'unset')
+
+// Pinning from the menu must not move the row between sections — the same jump
+// the panel had, but worse here, because a pin lifts the row out of its route
+// group entirely. The order is frozen at the first toggle and settled when the
+// menu is next opened.
+const beforePin = pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`)
+const pinAction = Array.from(block.querySelectorAll('.llmm-act'))
+  .find(button => /置顶|取消置顶|Pin|Unpin/.test(button.textContent ?? ''))
+await act(async () => {
+  pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await waitFor(() => /取消置顶|Unpin/.test(pinAction.textContent ?? ''))
+})
+check('pinning from the picker does not move the row between sections',
+  pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`).join('|')
+    === beforePin.join('|'),
+  `${manageTarget} was in ${beforePin.find(s => s.includes(manageTarget))?.split(':')[0]}`
+  + `, now ${pickerSections().map(s => `${s.title}:${s.items.map(r => r.name).join(',')}`).find(s => s.includes(manageTarget))?.split(':')[0]}`)
+check('the pin takes effect in place, from the Host\'s own answer',
+  /取消置顶|Unpin/.test(pinAction.textContent ?? ''),
+  pinAction.textContent ?? 'no pin action')
+// Put it back: the pinned set is a fixture for the sections asserted above.
+await act(async () => {
+  pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await waitFor(() => /^(置顶|Pin)$/.test(pinAction.textContent ?? ''))
+})
+
+// Hiding must not be a one-way door: the row leaves the menu, and a section at
+// the bottom offers it back.
+const hideAction = Array.from(block.querySelectorAll('.llmm-act'))
+  .find(button => /隐藏|Hide/.test(button.textContent ?? ''))
+await act(async () => {
+  hideAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await waitFor(() => pickerSections().some(section => /^(Hidden|已隐藏)/.test(section.title)))
+})
+const hiddenAt = pickerSections().findIndex(section => /^(Hidden|已隐藏)/.test(section.title))
+check('hiding from the picker moves the row into a Hidden section rather than losing it',
+  hiddenAt >= 0
+  && pickerSections()[hiddenAt].items.some(row => row.name === manageTarget),
+  hiddenAt < 0 ? 'no Hidden section' : pickerSections()[hiddenAt].items.map(r => r.name).join(', '))
+const occurrences = pickerSections().flatMap((section, index) =>
+  section.items.filter(row => row.name === manageTarget).map(() => index))
+check('a hidden row is no longer offered as a selectable route row',
+  hiddenAt >= 0 && occurrences.length === 1 && occurrences[0] === hiddenAt,
+  `appears in section(s) ${occurrences.join(', ') || 'nowhere'}; Hidden is at ${hiddenAt}`)
+// And it can be brought back from the same block.
+// The row kept its block open through the hide, and the disclosure toggles, so
+// opening it must be conditional — clicking an open chevron closes it.
+if (pickerDetailOf(manageTarget) === null) {
+  await act(async () => {
+    pickerRowFor(manageTarget).querySelector('.llmm-chevron')
+      .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => pickerDetailOf(manageTarget) !== null)
+  })
+}
+const unhideButton = Array.from(pickerDetailOf(manageTarget)?.querySelectorAll('.llmm-act') ?? [])
+  .find(button => /取消隐藏|Unhide/.test(button.textContent ?? ''))
+check('the Hidden section offers the way back',
+  unhideButton !== undefined, unhideButton?.textContent ?? 'no unhide action')
+if (unhideButton !== undefined) {
+  await act(async () => {
+    unhideButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => !pickerSections().some(section => /^(Hidden|已隐藏)/.test(section.title)))
+  })
+}
+check('a hidden row can be unhidden from the menu that hid it',
+  !pickerSections().some(section => /^(Hidden|已隐藏)/.test(section.title)),
+  pickerSections().map(s => s.title).join(' | ').slice(0, 120))
+
 // ── the picker and the panel must stay one design ───────────────────────────
 // The stylesheet lives in a template literal, so a single backtick or `${` inside a
 // CSS comment truncates it. The module still parses in some of those shapes — the
@@ -1160,11 +1284,14 @@ const mirrorButton = pinnedBody === null
 const selectionBefore = selections.length
 if (mirrorButton !== null) {
   await act(async () => {
-    mirrorButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    // The row is a wrapper now — it holds the selection control and the
+    // disclosure — so the click that selects goes to the control that owns it.
+    mirrorButton.querySelector('.llmm-item-select')
+      .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await waitFor(() => selections.length > selectionBefore)
   })
 }
-check('clicking a section row selects that row\'s own route and model',
+check('clicking a section row\'s selection control selects that row\'s own route and model',
   mirrorButton !== null
   && selections.length === selectionBefore + 1
   && selections[selectionBefore].provider === SECOND_ROUTE
