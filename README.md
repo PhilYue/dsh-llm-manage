@@ -30,18 +30,32 @@ Nothing here is hard-coded to one gateway or one model id.
 
 ## Install
 
+From the npm registry (the packaged release, no toolchain needed):
+
 ```
-dsh plugin --profile web add /absolute/path/to/dsh-llm-manage
+dsh plugin --profile web add dsh-llm-manage
 ```
 
 `dsh plugin` forwards the arguments after `--profile <name>` to pnpm inside that profile's
-directory, so anything pnpm accepts works here (`add`, `remove`, `why`, …). Installing from a
-path links the directory, which is what makes local edits show up without reinstalling; use
-the git URL instead to get a copy:
+directory, so anything pnpm accepts works here (`add`, `remove`, `why`, …). The profile maps
+`node_modules/dsh-llm-manage` to the package from the registry.
 
-```
-dsh plugin --profile web add git+https://github.com/PhilYue/dsh-llm-manage.git
-```
+### Development installs
+
+Prefer the npm package for a normal installation. Two alternatives are useful while working
+on the plugin itself:
+
+- Install from a **path** to link the directory, so local edits show up without reinstalling:
+  ```
+  dsh plugin --profile web add /absolute/path/to/dsh-llm-manage
+  ```
+  This symlinks the working copy — ideal when you are the author. Every edit is live, which
+  is why "Applying a change" below is written for it.
+- Install from the **git URL** to get a fixed copy of the latest source rather than the npm
+  release:
+  ```
+  dsh plugin --profile web add git+https://github.com/PhilYue/dsh-llm-manage.git
+  ```
 
 The package installs as a bundle: its `dsh.bundle.patch` row inserts one Host plugin, and
 its `dsh.client` declaration makes the web shell load the browser half. The Host half

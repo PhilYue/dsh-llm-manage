@@ -49,10 +49,10 @@
   "author": "PhilYue",
   "repository": {
     "type": "git",
-    "url": "https://github.com/PhilYue/dsh-llm-manage"
+    "url": "git+https://github.com/PhilYue/dsh-llm-manage.git"
   },
+  "homepage": "https://github.com/PhilYue/dsh-llm-manage#readme",
   "bugs": {
     "url": "https://github.com/PhilYue/dsh-llm-manage/issues"
-  },
-  "homepage": "https://github.com/PhilYue/dsh-llm-manage#readme"
+  }
 }
