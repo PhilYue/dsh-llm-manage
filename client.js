@@ -49,6 +49,26 @@ window.__ModuleLoader__.load({
      */
     const FREQUENT_LIMIT = 5
 
+    /**
+     * Where the row-density choice is remembered.
+     *
+     * Namespaced by the plugin route so it cannot collide with anything else the
+     * app stores, and read defensively: `localStorage` throws in a sandboxed
+     * frame, and a stored value that is not one of the two densities (an older
+     * build, a hand edit) must fall back rather than render nothing.
+     */
+    const DENSITY_KEY = 'llm-manage:density'
+    const DENSITIES = ['compact', 'comfortable']
+    const readDensity = () => {
+      try {
+        const stored = window.localStorage.getItem(DENSITY_KEY)
+        return DENSITIES.includes(stored) ? stored : 'compact'
+      } catch { return 'compact' }
+    }
+    const writeDensity = (value) => {
+      try { window.localStorage.setItem(DENSITY_KEY, value) } catch { /* not fatal */ }
+    }
+
     /** Dictionary, so both supported locales read naturally. */
     const DICT = {
       en: {
@@ -103,6 +123,38 @@ window.__ModuleLoader__.load({
         seedDone: 'History scan: {n} model response(s) counted from {s} session(s).',
         seedEmpty: 'History scan: nothing new to count.',
         seedFailed: 'History scan stopped: {reason}',
+        // Order freeze. Toggling a pin no longer moves the row, so the panel says
+        // when the order it is showing is no longer the order the sort would
+        // produce — otherwise a pin that does not move reads as a pin that failed.
+        orderPending: 'A pin changed since this order was set. It updates on collapse/expand, sort or refresh.',
+        // Density: the reason is the most informative column and the first to be
+        // truncated, so "compact" leads with it instead of trailing it.
+        densityLabel: 'Rows',
+        densityCompact: 'Compact',
+        densityComfortable: 'Comfortable',
+        expandRow: 'Show details',
+        collapseRow: 'Hide details',
+        detailStatus: 'Status',
+        detailReason: 'Reason',
+        detailSource: 'Checked by',
+        detailChecked: 'Checked',
+        detailDirectory: 'Gateway directory',
+        detailListed: 'listed',
+        detailMissing: 'not listed',
+        detailLevel: 'Proficiency',
+        detailNextLevel: 'next level at',
+        detailProgress: 'Progress',
+        detailUses: 'Uses',
+        detailRecent7: 'Last 7 days',
+        detailPrior7: 'Previous 7 days',
+        detailHeat: 'Heat',
+        detailFirstUsed: 'First used',
+        detailLastUsed: 'Last used',
+        detailTokens: 'Tokens in/out',
+        detailOrigin: 'Counted',
+        detailOriginSeeded: 'from session logs',
+        detailOriginLive: 'as it happened',
+        detailAlsoOn: 'Also on',
         pickerTitle: 'Model',
         search: 'Search models',
         noModels: 'No models matched.',
@@ -170,6 +222,33 @@ window.__ModuleLoader__.load({
         seedDone: '历史扫描：从 {s} 个会话中统计到 {n} 次模型响应。',
         seedEmpty: '历史扫描：没有新的可统计内容。',
         seedFailed: '历史扫描中断：{reason}',
+        orderPending: '自上次排序后有过置顶/收藏变更。收起/展开、切换排序或刷新后生效。',
+        densityLabel: '行密度',
+        densityCompact: '紧凑',
+        densityComfortable: '舒适',
+        expandRow: '展开详情',
+        collapseRow: '收起详情',
+        detailStatus: '状态',
+        detailReason: '原因',
+        detailSource: '检查方式',
+        detailChecked: '检查时间',
+        detailDirectory: '网关目录',
+        detailListed: '已列出',
+        detailMissing: '未列出',
+        detailLevel: '熟练度',
+        detailNextLevel: '升级所需调用',
+        detailProgress: '升级进度',
+        detailUses: '调用次数',
+        detailRecent7: '近 7 天',
+        detailPrior7: '前 7 天',
+        detailHeat: '热度',
+        detailFirstUsed: '首次使用',
+        detailLastUsed: '最近使用',
+        detailTokens: '输入/输出 token',
+        detailOrigin: '统计来源',
+        detailOriginSeeded: '来自会话日志',
+        detailOriginLive: '实时记录',
+        detailAlsoOn: '同名模型',
         pickerTitle: '模型',
         search: '搜索模型',
         noModels: '没有匹配的模型。',
@@ -390,6 +469,29 @@ window.__ModuleLoader__.load({
    hardcode a Menlo/Consolas stack, which ignored whatever the app configures. */
 .llmm-name{font-family:var(--ds-font-family-code);font-size:13px;line-height:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .llmm-why{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:60px}
+/* The disclosure control. A chevron rather than a hover-only affordance, for the
+   same reason the row actions are not hover-only: a control nobody can find is a
+   control nobody uses. It stays a real button so the detail block is reachable
+   from the keyboard without making the model name a second tab stop. */
+.llmm-chevron{flex:none;width:16px;height:16px;padding:0;border:0;border-radius:var(--dsw-radius-xs);background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:10px;line-height:16px;text-align:center;cursor:pointer}
+.llmm-chevron:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.llmm-chevron:focus-visible{outline:2px solid var(--dsw-focus-ring-color,var(--dsw-alias-brand-primary));outline-offset:1px}
+.llmm-chevron.llmm-chevron-open{color:var(--dsw-alias-label-secondary)}
+/* The name is a pointer target for the same disclosure; the chevron is its
+   keyboard- and screen-reader-visible twin, so this stays a span. */
+.llmm-namebtn{cursor:pointer}
+.llmm-namebtn:hover{text-decoration:underline}
+/* Comfortable density: the reason stops competing with the chips for one line and
+   gets a second one, wrapped to two lines before it ellipsises. */
+.llmm-row.llmm-loose{flex-wrap:wrap;row-gap:2px}
+.llmm-why-line{order:1;flex:0 0 100%;padding-left:34px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+/* The expanded detail block. Fields are label/value pairs on one line each, so a
+   long reason wraps under its own label instead of pushing the value off-screen. */
+.llmm-detail{margin:0 0 4px 34px;padding:6px 8px;border-left:2px solid var(--dsw-alias-border-l3);border-radius:0 var(--dsw-radius-sm) var(--dsw-radius-sm) 0;background:var(--dsw-alias-bg-layer-1,transparent);display:flex;flex-direction:column;gap:3px}
+.llmm-field{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:18px}
+.llmm-field-label{flex:none;width:112px;color:var(--dsw-alias-label-tertiary)}
+.llmm-field-value{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);word-break:break-word}
+.llmm-bar-field{flex:1;min-width:60px;align-self:center}
 .llmm-rowacts{display:flex;gap:2px;margin-left:auto;opacity:.6;transition:opacity .12s ease}
 /* Quiet at rest, full on hover or keyboard focus. They stay visible rather than
    appearing on hover: pin/favorite are the point of the panel, and a control you can
@@ -571,6 +673,13 @@ window.__ModuleLoader__.load({
       const [expanded, setExpanded] = useState(false)
       const [pending, setPending] = useState('')
       const [tip, setTip] = useState(null)
+      // The order the list is showing, frozen as model keys while the user works
+      // in it. `null` means "follow the sort"; see `displayRows` for why toggling
+      // a pin does not move a row.
+      const [frozenIds, setFrozenIds] = useState(null)
+      // Which rows have their detail block open, keyed the same way.
+      const [openRows, setOpenRows] = useState(() => new Set())
+      const [density, setDensity] = useState(readDensity)
 
       /**
        * The hover/focus label channel shared by every icon button.
@@ -648,6 +757,9 @@ window.__ModuleLoader__.load({
       // Pinned, then favorites, then flagged rows, then the rest: the panel's
       // first screen is the part that needs a decision. The usage orderings are
       // opt-in so the default view stays the one the panel was designed around.
+      /** Stable identity for one row, used to freeze and restore an order. */
+      const rowKey = (row) => `${row.route}/${row.model}`
+
       const ordered = useMemo(() => rows.slice().sort((left, right) => {
         const usageOf = (row) => (row.usage === null || row.usage === undefined ? null : row.usage)
         if (sortMode === 'level') {
@@ -662,7 +774,55 @@ window.__ModuleLoader__.load({
         const score = (row) => (row.pinned ? 0 : row.favorite ? 1 : isProblem(row.status) ? 2 : 3)
         return score(left) - score(right) || left.model.localeCompare(right.model)
       }), [rows, sortMode])
-      const visible = expanded ? ordered : ordered.slice(0, 8)
+
+      /**
+       * The rows in the order the list actually shows them.
+       *
+       * Toggling a pin or a favorite changes a row's state, not its position. The
+       * sort puts pinned and favorite rows first, so re-sorting on every toggle
+       * made the row jump to the top and took the user's scroll position with it:
+       * scroll down to model 40, pin it, and you are looking somewhere else. The
+       * order is therefore frozen at the first toggle and recomputed only at the
+       * boundaries where the user expects the list to settle — collapsing or
+       * expanding it, changing the sort, or refreshing.
+       */
+      const displayRows = useMemo(() => {
+        if (frozenIds === null) return ordered
+        const remaining = new Map(ordered.map(row => [rowKey(row), row]))
+        const kept = []
+        for (const id of frozenIds) {
+          const row = remaining.get(id)
+          if (row === undefined) continue
+          kept.push(row)
+          remaining.delete(id)
+        }
+        // Rows the freeze never saw — a model added to the route, or a first read
+        // that arrived after it — keep sort order at the end rather than being
+        // dropped from the list.
+        return [...kept, ...ordered.filter(row => remaining.has(rowKey(row)))]
+      }, [ordered, frozenIds])
+
+      const frozen = frozenIds !== null
+      // "The order on screen is no longer the order the sort would produce."
+      // Without saying so, a frozen list is indistinguishable from a pin that
+      // silently did nothing.
+      const orderStale = frozen && (frozenIds.length !== ordered.length
+        || frozenIds.some((id, index) => id !== rowKey(ordered[index])))
+
+      const visible = expanded ? displayRows : displayRows.slice(0, 8)
+
+      /**
+       * Freeze the order the list is showing, if it is not frozen already.
+       *
+       * Called before a toggle, never after: the point is to capture the order
+       * the user is looking at, so the row they just clicked does not move.
+       */
+      const freezeOrder = useCallback(() => {
+        setFrozenIds(current => (current === null ? displayRows.map(rowKey) : current))
+      }, [displayRows])
+
+      /** Release the freeze, so the next render applies the current sort. */
+      const releaseOrder = useCallback(() => { setFrozenIds(null) }, [])
 
       /**
        * Run one mutating action and fold its returned snapshot back in.
@@ -700,6 +860,9 @@ window.__ModuleLoader__.load({
        */
       const toggle = useCallback((row, list, on) => {
         const field = list === 'hidden' ? 'hidden' : list === 'pins' ? 'pinned' : 'favorite'
+        // Freeze before the change, so the row answers the click in place instead
+        // of jumping to the top of a re-sorted list under the user's cursor.
+        freezeOrder()
         const before = snap
         if (snap && Array.isArray(snap.groups)) {
           apply({
@@ -713,7 +876,7 @@ window.__ModuleLoader__.load({
         return run(`${list}:${row.model}`, {
           action: 'toggle', route: row.route, model: row.model, list, on,
         }).then((accepted) => { if (accepted !== true && before !== null) apply(before) })
-      }, [run, snap, apply])
+      }, [run, snap, apply, freezeOrder])
 
       /**
        * Deep-probe every currently listed model on this route, throttled by the Host.
@@ -747,7 +910,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'llmm-actions' },
               h(IconButton, {
                 icon: 'refresh', label: t('refresh'), disabled: busy, tip: tipChannel,
-                on: () => reload(true),
+                on: () => { releaseOrder(); reload(true) },
               }),
               h(IconButton, {
                 icon: 'zap', label: t('deepProbe'), disabled: busy || rows.length === 0, tip: tipChannel,
@@ -800,14 +963,14 @@ window.__ModuleLoader__.load({
             )
             : null,
           usageRows.length > 0
-            ? h('div', { className: 'llmm-sort' },
+            ? h('div', { className: 'llmm-sort llmm-sort-modes' },
               h('span', { className: 'llmm-sort-label' }, t('sortLabel')),
               ['default', 'level', 'heat'].map(mode => h('button', {
                 key: mode,
                 type: 'button',
                 className: `llmm-sortbtn${sortMode === mode ? ' llmm-sortbtn-on' : ''}`,
                 'aria-pressed': sortMode === mode,
-                onClick: () => setSortMode(mode),
+                onClick: () => { releaseOrder(); setSortMode(mode) },
               }, t(mode === 'default' ? 'sortDefault' : mode === 'level' ? 'sortLevel' : 'sortHeat'))),
             )
             : null,
@@ -815,69 +978,158 @@ window.__ModuleLoader__.load({
           error !== ''
             ? h('div', { className: 'llmm-err' }, error, ' ', h('button', { type: 'button', className: 'llmm-btn', onClick: () => reload(false) }, t('retry')))
             : null,
-          h('div', { className: 'llmm-rows' },
-            visible.map(row => h('div', {
-              key: row.model,
-              className: `llmm-row${row.hidden ? ' llmm-hidden' : ''}`,
-            },
-              h('span', { className: `llmm-dot ${statusTone(row.status)}`, title: statusLabel(row.status) }),
-              h('span', { className: 'llmm-name', title: row.model }, row.model),
-              isProblem(row.status)
-                ? h('span', { className: 'llmm-chip' }, statusLabel(row.status))
-                : null,
-              // Proficiency, then the recent count: the level is the trophy and
-              // the 7-day number is the current form, so they are shown together
-              // but never merged into one figure.
-              row.usage !== null && row.usage !== undefined && row.usage.uses > 0
-                ? h('span', {
-                  className: `llmm-chip llmm-lv llmm-lv-${Math.min(row.usage.level, 7)}`,
-                  title: `${t('level')} ${row.usage.level} · ${t('usesLabel')} ${row.usage.uses}`
-                    + (row.usage.nextAt > 0 ? ` · ${t('level')} ${row.usage.level + 1} @ ${row.usage.nextAt}` : '')
-                    + ` · ${t('tokensLabel')} ${row.usage.inputTokens}/${row.usage.outputTokens}`
-                    + (row.usage.seeded ? ` · ${t('seededNote')}` : ''),
-                }, `${t('levelShort')}.${row.usage.level}`)
-                : null,
-              row.usage !== null && row.usage !== undefined && row.usage.recent7 > 0
-                ? h('span', { className: `llmm-trend llmm-trend-${row.usage.trend}`, title: t(`trend${row.usage.trend === 'up' ? 'Up' : row.usage.trend === 'down' ? 'Down' : 'Flat'}`) },
-                  `${row.usage.trend === 'up' ? '↑' : row.usage.trend === 'down' ? '↓' : '→'}${row.usage.recent7}`)
-                : null,
-              h('span', { className: 'llmm-why', title: `${sourceLabel(row.source)} · ${ageOf(row.at)}${row.reason ? ` · ${row.reason}` : ''}` },
-                row.reason !== '' ? `${sourceLabel(row.source)} · ${ageOf(row.at)} · ${row.reason}` : `${statusLabel(row.status)} · ${sourceLabel(row.source)}`,
-              ),
-              row.alsoOn && row.alsoOn.length > 0
-                ? h('span', { className: 'llmm-chip', title: `${t('alsoOn')}: ${row.alsoOn.join(', ')}` }, `${t('alsoOn')} ${row.alsoOn.length}`)
-                : null,
-              h('div', { className: 'llmm-rowacts' },
-                h(IconButton, {
-                  icon: 'pin', label: row.pinned ? t('unpin') : t('pin'), active: row.pinned,
-                  pending: pending === `pins:${row.model}`, tip: tipChannel,
-                  on: () => toggle(row, 'pins', !row.pinned),
-                }),
-                h(IconButton, {
-                  icon: 'star', label: row.favorite ? t('unfavorite') : t('favorite'), active: row.favorite,
-                  filled: row.favorite, pending: pending === `favorites:${row.model}`, tip: tipChannel,
-                  on: () => toggle(row, 'favorites', !row.favorite),
-                }),
-                h(IconButton, {
-                  icon: row.hidden ? 'eyeOff' : 'eye', label: row.hidden ? t('unhide') : t('hide'), active: row.hidden,
-                  pending: pending === `hidden:${row.model}`, tip: tipChannel,
-                  on: () => toggle(row, 'hidden', !row.hidden),
-                }),
-                h(IconButton, {
-                  icon: 'pulse', label: pending === `probe:${row.model}` ? t('probing') : t('probe'),
-                  danger: isProblem(row.status), pending: pending === `probe:${row.model}`, tip: tipChannel,
-                  on: () => run(`probe:${row.model}`, { action: 'probe', route: row.route, model: row.model }),
-                }),
-              ),
-            )),
+          // The order on screen can lag the sort while pins are being set (see
+          // `displayRows`). Saying so, and saying what applies it, is what keeps
+          // the freeze from reading as a broken toggle.
+          orderStale ? h('div', { className: 'llmm-hint' }, t('orderPending')) : null,
+          h('div', { className: 'llmm-sort llmm-density' },
+            h('span', { className: 'llmm-sort-label' }, t('densityLabel')),
+            DENSITIES.map(choice => h('button', {
+              key: choice,
+              type: 'button',
+              className: `llmm-sortbtn${density === choice ? ' llmm-sortbtn-on' : ''}`,
+              'aria-pressed': density === choice,
+              onClick: () => { setDensity(choice); writeDensity(choice) },
+            }, t(choice === 'compact' ? 'densityCompact' : 'densityComfortable'))),
+          ),
+          h('div', { className: `llmm-rows llmm-${density}` },
+            visible.map(row => {
+              const key = rowKey(row)
+              const open = openRows.has(key)
+              const usage = row.usage !== null && row.usage !== undefined && row.usage.uses > 0 ? row.usage : null
+              const toggleOpen = () => setOpenRows((current) => {
+                const next = new Set(current)
+                if (next.has(key)) next.delete(key)
+                else next.add(key)
+                return next
+              })
+              // The reason leads. It used to trail `source · age`, so the ellipsis
+              // in a narrow row ate exactly the part worth reading and kept the
+              // part that is already encoded in the status dot and the chip.
+              const why = row.reason !== ''
+                ? `${row.reason} · ${sourceLabel(row.source)} · ${ageOf(row.at)}`
+                : `${statusLabel(row.status)} · ${sourceLabel(row.source)}`
+              /** One labelled field of the detail block; absent values render nothing. */
+              const field = (label, value) => (value === null || value === undefined || value === '')
+                ? null
+                : h('div', { className: 'llmm-field' },
+                  h('span', { className: 'llmm-field-label' }, label),
+                  h('span', { className: 'llmm-field-value' }, value))
+              return h(React.Fragment, { key },
+                h('div', {
+                  className: `llmm-row${row.hidden ? ' llmm-hidden' : ''}${density === 'comfortable' ? ' llmm-loose' : ''}`,
+                },
+                  h('button', {
+                    type: 'button',
+                    className: `llmm-chevron${open ? ' llmm-chevron-open' : ''}`,
+                    'aria-expanded': open,
+                    'aria-label': open ? t('collapseRow') : t('expandRow'),
+                    title: open ? t('collapseRow') : t('expandRow'),
+                    onClick: toggleOpen,
+                  }, open ? '▾' : '▸'),
+                  h('span', { className: `llmm-dot ${statusTone(row.status)}`, title: statusLabel(row.status) }),
+                  // The name opens the detail block, which is what its own label
+                  // would do. It stays a span rather than a second button so the
+                  // row does not gain another tab stop on top of the chevron that
+                  // already announces the same action and carries `aria-expanded`.
+                  h('span', { className: 'llmm-name llmm-namebtn', title: row.model, onClick: toggleOpen }, row.model),
+                  isProblem(row.status)
+                    ? h('span', { className: 'llmm-chip' }, statusLabel(row.status))
+                    : null,
+                  // Proficiency, then the recent count: the level is the trophy and
+                  // the 7-day number is the current form, so they are shown together
+                  // but never merged into one figure.
+                  usage !== null
+                    ? h('span', {
+                      className: `llmm-chip llmm-lv llmm-lv-${Math.min(usage.level, 7)}`,
+                      title: `${t('level')} ${usage.level} · ${t('usesLabel')} ${usage.uses}`
+                        + (usage.nextAt > 0 ? ` · ${t('level')} ${usage.level + 1} @ ${usage.nextAt}` : '')
+                        + ` · ${t('tokensLabel')} ${usage.inputTokens}/${usage.outputTokens}`
+                        + (usage.seeded ? ` · ${t('seededNote')}` : ''),
+                    }, `${t('levelShort')}.${usage.level}`)
+                    : null,
+                  usage !== null && usage.recent7 > 0
+                    ? h('span', { className: `llmm-trend llmm-trend-${usage.trend}`, title: t(`trend${usage.trend === 'up' ? 'Up' : usage.trend === 'down' ? 'Down' : 'Flat'}`) },
+                      `${usage.trend === 'up' ? '↑' : usage.trend === 'down' ? '↓' : '→'}${usage.recent7}`)
+                    : null,
+                  // Compact keeps one line and lets the reason take the slack;
+                  // comfortable gives it a line of its own below (see `.llmm-loose`).
+                  density === 'compact'
+                    ? h('span', { className: 'llmm-why', title: `${sourceLabel(row.source)} · ${ageOf(row.at)}` }, why)
+                    : null,
+                  row.alsoOn && row.alsoOn.length > 0
+                    ? h('span', { className: 'llmm-chip', title: `${t('alsoOn')}: ${row.alsoOn.join(', ')}` }, `${t('alsoOn')} ${row.alsoOn.length}`)
+                    : null,
+                  h('div', { className: 'llmm-rowacts' },
+                    h(IconButton, {
+                      icon: 'pin', label: row.pinned ? t('unpin') : t('pin'), active: row.pinned,
+                      pending: pending === `pins:${row.model}`, tip: tipChannel,
+                      on: () => toggle(row, 'pins', !row.pinned),
+                    }),
+                    h(IconButton, {
+                      icon: 'star', label: row.favorite ? t('unfavorite') : t('favorite'), active: row.favorite,
+                      filled: row.favorite, pending: pending === `favorites:${row.model}`, tip: tipChannel,
+                      on: () => toggle(row, 'favorites', !row.favorite),
+                    }),
+                    h(IconButton, {
+                      icon: row.hidden ? 'eyeOff' : 'eye', label: row.hidden ? t('unhide') : t('hide'), active: row.hidden,
+                      pending: pending === `hidden:${row.model}`, tip: tipChannel,
+                      on: () => toggle(row, 'hidden', !row.hidden),
+                    }),
+                    h(IconButton, {
+                      icon: 'pulse', label: pending === `probe:${row.model}` ? t('probing') : t('probe'),
+                      danger: isProblem(row.status), pending: pending === `probe:${row.model}`, tip: tipChannel,
+                      on: () => run(`probe:${row.model}`, { action: 'probe', route: row.route, model: row.model }),
+                    }),
+                  ),
+                  density === 'comfortable'
+                    ? h('div', { className: 'llmm-why llmm-why-line' }, why)
+                    : null,
+                ),
+                // Everything the row cannot carry inline, in one place, opened on
+                // demand. A hover tooltip was the alternative and it is the weaker
+                // one: it needs a pointer, cannot be read on a touch screen, and
+                // cannot be held open beside a second row to compare.
+                open
+                  ? h('div', { className: 'llmm-detail' },
+                    field(t('detailStatus'), statusLabel(row.status)),
+                    field(t('detailReason'), row.reason),
+                    field(t('detailSource'), sourceLabel(row.source)),
+                    field(t('detailChecked'), row.at > 0 ? ageOf(row.at) : null),
+                    field(t('detailDirectory'), row.inDirectory === true ? t('detailListed') : t('detailMissing')),
+                    usage !== null
+                      ? field(t('detailLevel'), `${t('levelShort')}.${usage.level}`
+                        + (usage.nextAt > 0 ? ` · ${t('detailNextLevel')} ${usage.nextAt}` : ''))
+                      : null,
+                    usage !== null
+                      ? h('div', { className: 'llmm-field' },
+                        h('span', { className: 'llmm-field-label' }, t('detailProgress')),
+                        h('div', { className: 'llmm-bar llmm-bar-field' },
+                          h('div', { className: 'llmm-bar-fill', style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` } })))
+                      : null,
+                    usage !== null ? field(t('detailUses'), String(usage.uses)) : null,
+                    usage !== null ? field(t('detailRecent7'), String(usage.recent7)) : null,
+                    usage !== null ? field(t('detailPrior7'), String(usage.prior7)) : null,
+                    usage !== null && typeof usage.heat === 'number' ? field(t('detailHeat'), usage.heat.toFixed(1)) : null,
+                    usage !== null && usage.firstAt > 0 ? field(t('detailFirstUsed'), ageOf(usage.firstAt)) : null,
+                    usage !== null && usage.lastAt > 0 ? field(t('detailLastUsed'), ageOf(usage.lastAt)) : null,
+                    usage !== null ? field(t('detailTokens'), `${usage.inputTokens} / ${usage.outputTokens}`) : null,
+                    usage !== null ? field(t('detailOrigin'), usage.seeded ? t('detailOriginSeeded') : t('detailOriginLive')) : null,
+                    row.alsoOn && row.alsoOn.length > 0 ? field(t('detailAlsoOn'), row.alsoOn.join(', ')) : null,
+                  )
+                  : null,
+              )
+            }),
             rows.length === 0 && !busy ? h('div', { className: 'llmm-empty' }, t('noModels')) : null,
           ),
-          ordered.length > 8
+          displayRows.length > 8
             ? h('button', {
               type: 'button', className: 'llmm-btn',
               style: { marginTop: '6px' },
-              onClick: () => setExpanded(value => !value),
-            }, expanded ? t('showFewer') : `${t('showAll')} (${ordered.length})`)
+              // Collapsing or expanding is one of the boundaries that settles the
+              // order, so a frozen list gets to apply its pending pins here.
+              onClick: () => { releaseOrder(); setExpanded(value => !value) },
+            }, expanded ? t('showFewer') : `${t('showAll')} (${displayRows.length})`)
             : null,
           // The backfill is background work, and on a fresh profile it is the only
           // thing standing between an empty roster and a real one. Saying where the

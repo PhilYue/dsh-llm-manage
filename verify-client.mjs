@@ -392,7 +392,9 @@ check('the panel totals the recorded uses',
 // The sort control: the two modes must disagree, because they answer different
 // questions ("what am I best at" vs "what am I reaching for today").
 const firstName = () => container.querySelector('.llmm-row .llmm-name')?.textContent ?? ''
-const sortButtons = () => Array.from(container.querySelectorAll('.llmm-sortbtn'))
+// Scoped to the sort toolbar: the density control shares the button vocabulary
+// deliberately, so an unscoped query would count its two buttons as orderings.
+const sortButtons = () => Array.from(container.querySelectorAll('.llmm-sort-modes .llmm-sortbtn'))
 const sortBy = async (index) => {
   await act(async () => {
     sortButtons()[index].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
@@ -484,7 +486,183 @@ check('the panel adopts the Host snapshot, not just its optimistic guess',
   favoriteLabels() === expectedFavorites,
   `remaining "Favorite" labels=${favoriteLabels()} (expected ${expectedFavorites}; ${expectedFavorites + 1} means the snapshot was ignored)`)
 
-// ── the composer model picker ───────────────────────────────────────────────
+    // ── the order freeze ────────────────────────────────────────────────────────
+    // Toggling a pin used to re-sort the list: the sort puts pinned rows first, so
+    // the row under the cursor jumped to the top and took the user's scroll
+    // position with it — scroll to model 40, pin it, and you are looking somewhere
+    // else. The order is now frozen at the first toggle, and released only at the
+    // boundaries where the user expects the list to settle. This is that
+    // regression, asserted on the order the rows are actually rendered in.
+    const shownNames = () => Array.from(container.querySelectorAll('.llmm-row .llmm-name'))
+      .map(node => node.textContent)
+    const sortPanelBy = (mode) => act(async () => {
+      Array.from(container.querySelectorAll('.llmm-sort-modes .llmm-sortbtn'))[mode]
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => true)
+    })
+    await sortPanelBy(0)
+    const orderBefore = shownNames()
+    // A row that is not already first: pinning the first row could not reorder
+    // anything, so the assertion would pass against the old behaviour too.
+    const pinTarget = orderBefore[2]
+    const pinButtonFor = (model) => Array.from((rowFor(model) ?? container).querySelectorAll('button'))
+      .find(b => /置顶|取消置顶|Pin|Unpin/.test(b.getAttribute('aria-label') ?? ''))
+    await act(async () => {
+      pinButtonFor(pinTarget).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => /取消置顶|Unpin/.test(pinButtonFor(pinTarget)?.getAttribute('aria-label') ?? ''))
+    })
+    check('pinning a row does not move it',
+      shownNames().join('|') === orderBefore.join('|'),
+      `${pinTarget} at index ${shownNames().indexOf(pinTarget)}, was ${orderBefore.indexOf(pinTarget)}`
+      + `; ${shownNames().filter((n, i) => n !== orderBefore[i]).length} row(s) changed place`)
+    check('the pin takes effect in place even though the order did not change',
+      /取消置顶|Unpin/.test(pinButtonFor(pinTarget)?.getAttribute('aria-label') ?? ''),
+      pinButtonFor(pinTarget)?.getAttribute('aria-label') ?? 'no pin button')
+    // A frozen order that says nothing reads as a pin that did nothing.
+    const hints = () => Array.from(container.querySelectorAll('.llmm-hint')).map(n => n.textContent)
+    check('a frozen order says that the sort is pending',
+      hints().some(text => /收起|展开|排序|collapse|expand|sort/i.test(text)),
+      hints().join(' | ').slice(0, 140))
+
+    // The boundary: collapsing or expanding settles the order, so the pending pin
+    // is expected to move then. Asserting that it moved is what proves the freeze
+    // is a freeze rather than a broken sort.
+    await act(async () => {
+      const showAll = Array.from(container.querySelectorAll('.llmm-btn'))
+        .find(b => /全部|收起|show all|fewer/i.test(b.textContent ?? ''))
+      // A catalogue short enough to fit on one screen has no expand button; the
+      // sort control is a boundary too, and it is always present once usage exists.
+      const boundary = showAll ?? Array.from(container.querySelectorAll('.llmm-sort-modes .llmm-sortbtn'))[0]
+      boundary.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => true)
+    })
+    check('a boundary (expand or sort) applies the pending order',
+      shownNames().indexOf(pinTarget) < orderBefore.indexOf(pinTarget),
+      `${pinTarget} at index ${shownNames().indexOf(pinTarget)}, was ${orderBefore.indexOf(pinTarget)}`
+      + ` — a pin that never reorders anything would leave it where it was`)
+    check('after the boundary the frozen order is current again',
+      !hints().some(text => /收起|展开|排序|collapse|expand|sort/i.test(text)),
+      hints().join(' | ').slice(0, 140))
+
+    // ── the row's detail block ──────────────────────────────────────────────────
+    // The row carries what a decision needs and nothing else; everything else the
+    // Host knows lives here. A hover tooltip was the alternative and it is the
+    // weaker one — it needs a pointer, cannot be read on a touch screen, and
+    // cannot be held open beside a second row to compare.
+    // The detail block is the row's next sibling: a Fragment adds no DOM node, so
+    // adjacency is itself part of the contract — the block belongs to this row.
+    const detailOf = (model) => {
+      const next = rowFor(model)?.nextElementSibling ?? null
+      return next !== null && next.classList.contains('llmm-detail') ? next : null
+    }
+    const chevronFor = (model) => (rowFor(model) ?? container).querySelector('.llmm-chevron')
+    check('no detail block is open before anything is expanded', detailOf(pinTarget) === null)
+    check('every row offers a labelled disclosure control',
+      chevronFor(pinTarget) !== null
+      && /details|展开|收起/i.test(chevronFor(pinTarget).getAttribute('aria-label') ?? ''),
+      chevronFor(pinTarget)?.getAttribute('aria-label') ?? 'no chevron')
+    await act(async () => {
+      chevronFor(pinTarget).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => detailOf(pinTarget) !== null)
+    })
+    const detail = detailOf(pinTarget)
+    check('the chevron opens a detail block under its own row',
+      detail !== null && detail.querySelectorAll('.llmm-field').length >= 3,
+      `${detail?.querySelectorAll('.llmm-field').length ?? 0} field(s)`)
+    check('the disclosure reports its state',
+      chevronFor(pinTarget).getAttribute('aria-expanded') === 'true',
+      chevronFor(pinTarget).getAttribute('aria-expanded') ?? 'unset')
+    check('the detail block shows the fields the row has no room for',
+      Array.from(detail?.querySelectorAll('.llmm-field-label') ?? []).length >= 3,
+      Array.from(detail?.querySelectorAll('.llmm-field-label') ?? []).map(n => n.textContent).join(', ').slice(0, 140))
+
+    // A row that carries usage is the interesting case: the numbers exist, the row
+    // has no room for them, and the detail block is where they have to appear.
+    const detailField = (node, labelPattern) => Array.from(node?.querySelectorAll('.llmm-field') ?? [])
+      .find(f => labelPattern.test(f.querySelector('.llmm-field-label')?.textContent ?? ''))
+    const usedName = shownNames().find(name => rowFor(name)?.querySelector('.llmm-lv') !== null)
+    if (usedName !== undefined && detailOf(usedName) === null) {
+      await act(async () => {
+        chevronFor(usedName).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+        await waitFor(() => detailOf(usedName) !== null)
+      })
+    }
+    const usedDetail = usedName === undefined ? null : detailOf(usedName)
+    check('a used row\'s detail block carries the usage numbers',
+      usedDetail !== null
+      && detailField(usedDetail, /Uses|调用次数/) !== undefined
+      && detailField(usedDetail, /Tokens|token/) !== undefined,
+      usedName === undefined ? 'no used row on screen'
+        : Array.from(usedDetail?.querySelectorAll('.llmm-field-label') ?? []).map(n => n.textContent).join(', ').slice(0, 160))
+    // The reason must be the same string in both places, and it must lead the
+    // compact row — trailing `source · age` is what let the ellipsis eat it. Read
+    // from the detail block rather than from a fixture, so this holds whatever
+    // reason the Host actually reports.
+    const reasonField = detailField(usedDetail, /Reason|原因/)
+    const reasonValue = reasonField?.querySelector('.llmm-field-value')?.textContent ?? ''
+    // Conditional on the Host reporting a reason at all: in an environment whose
+    // rows carry none, the check reports that rather than passing as if it had
+    // exercised the ordering.
+    check('the reason the Host reports leads the compact row (skipped when there is none)',
+      reasonValue === '' || (rowFor(usedName)?.querySelector('.llmm-why')?.textContent ?? '').startsWith(reasonValue),
+      reasonValue === '' ? 'the row reports no reason'
+        : `reason="${reasonValue.slice(0, 48)}" why="${(rowFor(usedName)?.querySelector('.llmm-why')?.textContent ?? '').slice(0, 48)}"`)
+    if (usedName !== undefined) {
+      await act(async () => {
+        chevronFor(usedName).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+        await waitFor(() => detailOf(usedName) === null)
+      })
+    }
+    // The name is the pointer target for the same disclosure.
+    await act(async () => {
+      rowFor(pinTarget).querySelector('.llmm-name')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => detailOf(pinTarget) === null)
+    })
+    check('clicking the model name closes the detail block again', detailOf(pinTarget) === null)
+
+    // ── row density ─────────────────────────────────────────────────────────────
+    const rowsEl = () => container.querySelector('.llmm-rows')
+    const densityButtons = () => Array.from(container.querySelectorAll('.llmm-density .llmm-sortbtn'))
+    check('the density control offers both densities', densityButtons().length === 2,
+      densityButtons().map(b => b.textContent).join(' / '))
+    check('the default density is compact',
+      rowsEl().className.includes('llmm-compact')
+      && container.querySelectorAll('.llmm-why-line').length === 0,
+      rowsEl().className)
+    // The reason leads. It used to trail `source · age`, so the ellipsis ate
+    // exactly the part worth reading and kept the part the status dot already says.
+    const whyText = rowFor(pinTarget)?.querySelector('.llmm-why')?.textContent ?? ''
+    check('compact density leads with the reason rather than the source label',
+      whyText.length > 0 && !/^(deep probe|passive|gateway directory|none) ·/.test(whyText),
+      whyText.slice(0, 90))
+    await act(async () => {
+      densityButtons()[1].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => rowsEl().className.includes('llmm-comfortable'))
+    })
+    check('switching to comfortable gives the reason its own line',
+      rowsEl().className.includes('llmm-comfortable')
+      && container.querySelectorAll('.llmm-why-line').length > 0,
+      `${container.querySelectorAll('.llmm-why-line').length} second line(s)`)
+    check('the chosen density is remembered',
+      window.localStorage.getItem('llm-manage:density') === 'comfortable',
+      String(window.localStorage.getItem('llm-manage:density')))
+    await act(async () => {
+      densityButtons()[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => rowsEl().className.includes('llmm-compact'))
+    })
+    // Put the overlay back. These assertions pinned a row that was sitting in the
+    // Favorites section, and the picker assertions below lift pinned rows out of
+    // Favorites — so leaving it pinned would change their fixture, not test it.
+    await act(async () => {
+      pinButtonFor(pinTarget).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => /^(置顶|Pin)$/.test(pinButtonFor(pinTarget)?.getAttribute('aria-label') ?? ''))
+    })
+    check('the pin used by this block was undone, leaving the overlay as it was',
+      /^(置顶|Pin)$/.test(pinButtonFor(pinTarget)?.getAttribute('aria-label') ?? ''),
+      pinButtonFor(pinTarget)?.getAttribute('aria-label') ?? 'no pin button')
+
+    // ── the composer model picker ───────────────────────────────────────────────
 // This seat had no coverage at all, which is how its panel copy came to promise
 // that pins and favorites "sort to the top" while the picker rendered the Host's
 // groups verbatim. The Host ranks only WITHIN a route group and orders groups by

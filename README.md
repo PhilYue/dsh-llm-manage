@@ -380,6 +380,55 @@ four controls fit beside a model name instead of wrapping the row: pin, favorite
 probe. Each carries an `aria-label`, so it stays readable to a screen reader. The header's
 two actions (re-check the gateway, deep-probe all) use the same treatment.
 
+#### Pinning does not move the row
+
+The default order puts pinned and favorite rows first, so re-sorting on every toggle moved
+the row you had just clicked to the top of the list and took your scroll position with it:
+scroll down to model 40 of 80, pin it, and you are looking at a different part of the list.
+Toggling pin, favorite or hide now changes that row's **state and not its position**.
+
+The order is frozen at the first toggle and applied at the boundaries where you expect the
+list to settle:
+
+- collapsing or expanding the list,
+- changing the sort,
+- re-checking the gateway.
+
+While a pending change is outstanding the panel says so, because a frozen list is otherwise
+indistinguishable from a pin that silently did nothing. Without the freeze the row under the
+cursor moves; with it, the only thing that moves is the pin icon.
+
+#### A row carries the decision; the detail block carries the record
+
+A row shows what choosing needs — health dot, name, status, level, recent-form count, and a
+one-line reason. Everything the Host knows does not fit on one line at a readable size, so
+each row has a **chevron** that opens a detail block beneath it. Both the chevron and the
+model name open it; the chevron is the one that carries `aria-expanded` and the label, so
+the block is reachable from the keyboard without adding a second tab stop per row.
+
+The block lists the record in full: status, the complete reason, what checked it and when,
+whether the route's gateway directory still lists it, level and distance to the next level,
+a progress bar, uses, the last and previous seven days, heat, first and last use, tokens
+in/out, and whether the numbers came from the history scan or were counted live.
+
+A hover tooltip was the alternative and it is the weaker one: it needs a pointer, it cannot
+be read on a touch screen, and it cannot be held open beside a second row to compare.
+
+#### Density, and why the reason leads
+
+The reason is the most informative thing about a flagged model and the first thing a narrow
+row truncates. It is rendered **first** — the source and age trail it, because the status dot
+and the status chip already say most of what they say. Trailing the reason meant the ellipsis
+ate exactly the part worth reading.
+
+Two densities are offered, and the choice is remembered:
+
+- **Compact** (default) keeps one line per row and gives the reason the remaining space.
+- **Comfortable** gives the reason a second line, wrapped to two lines before it truncates.
+
+With eighty models, compact is what keeps the list scannable; comfortable is for when you are
+investigating one of them.
+
 The tooltip is rendered at the panel root rather than inside the row, because the row list
 is a scroll container that would clip it; it is positioned against the viewport and clamped
 so a button near an edge cannot push the label off-screen.
