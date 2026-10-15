@@ -135,6 +135,12 @@ const REASON = {
   QUOTA: 'quota',
   /** The API key is being rate limited; switching models cannot help. */
   RATE_LIMITED: 'rate_limited',
+  /**
+   * The route has no adapter registered at all, so nothing on it can be called.
+   * A provider-scope fault: no model on that route would have worked, so it must
+   * not be recorded against the model that happened to be selected.
+   */
+  NO_ADAPTER: 'no_adapter',
   /** A probe or request failed for any other reason. */
   ERROR: 'error',
   /** Verified reachable. */
@@ -186,6 +192,12 @@ function classifyFailure(failure) {
   const code = gatewayCode(text)
   const detail = String(failure?.message ?? '').slice(0, 400)
 
+  if (failure?.code === 'NO_ADAPTER' || /no adapter registered for provider/i.test(text)) {
+    // The route itself is unusable. Another model on that route cannot help, but
+    // another provider can, so it stays switchable — while the provider scope
+    // keeps it out of the model's own health record.
+    return { reason: REASON.NO_ADAPTER, detail, scope: 'provider', switchable: true }
+  }
   if (code === GW_MODEL_MISSING || /模型不存在|model not found|does not exist|unknown model/i.test(text)) {
     return { reason: REASON.RETIRED, detail, scope: 'model', switchable: true }
   }
@@ -703,10 +715,22 @@ export function apply(ctx, rawConfig) {
 
   /** Modest in-process cache of route catalogs, keyed by route id. */
   const catalogCache = new Map()
-  /** Per-session model override awaiting the retry that consumes it. */
+  /**
+   * Per-session model override awaiting the retry that consumes it.
+   *
+   * It carries the turn and step it was set for, and is only applied to that
+   * exact request. The previous version matched on session alone, so an override
+   * whose retry never happened stayed live for its whole TTL and was then
+   * consumed by whatever request came next — silently running a later turn on a
+   * model the user never chose.
+   */
   const pendingOverride = new Map()
   /** Last request config seen per session, so a failure names the model it came from. */
   const lastRequest = new Map()
+  /** Sessions the user told us to stop switching models in. */
+  const noAutoSwitch = new Set()
+  /** Switches decided but not yet proven, keyed by session id. */
+  const pendingSwitch = new Map()
   /** Automatic switches already spent, per `sessionId/turn`. */
   const fallbacksThisTurn = new Map()
   /** Routes whose gateway directory was fetched, and when. */
@@ -1534,6 +1558,42 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
+   * Move the Session's own model selection, leaving the user's saved default alone.
+   *
+   * `sessionController.selectModel` validates the target against a registered
+   * adapter and appends a durable `model/selection` event, so the change is real,
+   * visible and survives the turn — which is the difference between a banner that
+   * reports a switch and a switch that happened. It also saves the selection as
+   * the default model, which an automatic recovery has no business doing, so the
+   * previous default is put back immediately afterwards (saves commit in
+   * submission order, so the restore is what lands).
+   *
+   * @param {string} sessionId - the Session whose model should move.
+   * @param {{ route: string, model: string }} target - the resolved target.
+   * @returns {Promise<{ ok: boolean, why?: string }>} whether the Session moved.
+   */
+  async function selectSessionModel(sessionId, target) {
+    const controller = ctx.get('sessionController')
+    if (controller === undefined || typeof controller.selectModel !== 'function') {
+      return { ok: false, why: 'this host has no sessionController, so only this turn could be moved' }
+    }
+    const defaults = ctx.get('agentDefaultModel')
+    const previousDefault = defaults !== undefined && typeof defaults.currentSelection === 'function'
+      ? defaults.currentSelection()
+      : undefined
+    try {
+      await controller.selectModel({ sessionId, provider: target.route, model: target.model })
+    } catch (error) {
+      return { ok: false, why: error instanceof Error ? error.message : String(error) }
+    }
+    if (previousDefault !== undefined && defaults !== undefined && typeof defaults.saveSelection === 'function') {
+      // Best effort: failing to restore the default must not fail the recovery.
+      await defaults.saveSelection(previousDefault).catch(() => {})
+    }
+    return { ok: true }
+  }
+
+  /**
    * Perform one automatic model switch, or explain why it is refused.
    * @param {object} payload - the `agent/request-error` payload.
    * @returns {Promise<{ ok: true, route: string, model: string } | { ok: false, why: string }>} the outcome.
@@ -1541,6 +1601,7 @@ export function apply(ctx, rawConfig) {
   async function switchModel(payload) {
     const { agent, turn, provider, failure } = payload
     if (!config.fallback.enabled) return { ok: false, why: 'fallback is disabled in config' }
+    if (noAutoSwitch.has(agent.id)) return { ok: false, why: 'automatic switching is off for this session' }
     const current = lastRequest.get(agent.id)
     const failedModel = current?.model
     if (failedModel === undefined) return { ok: false, why: 'the failing model could not be identified' }
@@ -1556,21 +1617,31 @@ export function apply(ctx, rawConfig) {
     const chain = await fallbackChain(provider, failedModel)
     const next = chain[0]
     if (next === undefined) return { ok: false, why: 'no usable alternative model was found' }
-    pendingOverride.set(agent.id, { route: next.route, model: next.model, at: Date.now() })
+    pendingOverride.set(agent.id, { route: next.route, model: next.model, turn, step: payload.step, at: Date.now() })
     fallbacksThisTurn.set(budgetKey, spent + 1)
     diagnostics.fallbacks += 1
-    // Record the switch before it happens so the reason it happened is durable
-    // even if the retry then fails for an unrelated cause.
     const previous = { route: provider, model: failedModel }
-    // Kept per session so the banner appears in the conversation that actually
-    // switched, not in every open conversation.
-    diagnostics.bySession[agent.id] = {
+    // Move the Session itself, so the model really changes rather than only the
+    // one request about to be retried. A turn-scoped override alone left the
+    // session — and every surface showing it — on the old model, which is why a
+    // banner could report a switch the user never saw.
+    const sessionSwitch = await selectSessionModel(agent.id, next)
+    if (sessionSwitch.ok !== true) {
+      diagnostics.refusals.push({ at: Date.now(), why: `session model not moved: ${sessionSwitch.why}` })
+    }
+    // Recorded as PENDING. Nothing here has happened yet: the retry may fail, be
+    // aborted, or run somewhere else entirely. It is promoted to a report only
+    // when a committed assistant message proves which model actually answered.
+    pendingSwitch.set(agent.id, {
       at: Date.now(),
+      turn,
+      step: payload.step,
       from: previous,
       to: { route: next.route, model: next.model },
       reason: verdict.reason,
       detail: verdict.detail,
-    }
+      sessionSwitched: sessionSwitch.ok === true,
+    })
     await store.update('__events__', (overlay) => ({
       ...overlay,
       recent: [{ route: next.route, model: next.model, at: Date.now() }, ...overlay.recent].slice(0, RECENT_LIMIT),
@@ -1601,7 +1672,13 @@ export function apply(ctx, rawConfig) {
       diagnostics.classified[verdict.reason] = (diagnostics.classified[verdict.reason] ?? 0) + 1
       const current = lastRequest.get(payload.agent.id)
       if (current?.model !== undefined) {
-        recordHealth(payload.provider, current.model, verdict, 'passive').catch(() => {})
+        // Only a model-scope verdict is a fact about the model. A provider-scope
+        // fault (no adapter registered) says nothing about any model on that
+        // route, and recording it there would blacklist the model from every
+        // later fallback chain — `ERROR` has no staleness escape, unlike QUOTA.
+        if (verdict.scope === 'model') {
+          recordHealth(payload.provider, current.model, verdict, 'passive').catch(() => {})
+        }
         // A failed call is not a use — it must not inflate proficiency — but it
         // is the one honest "attempts" signal the host offers, so it is kept
         // apart from `uses` rather than thrown away.
@@ -1634,11 +1711,12 @@ export function apply(ctx, rawConfig) {
       const decision = await next()
       const override = pendingOverride.get(payload.agent.id)
       if (override === undefined) return decision
-      if (Date.now() - override.at > OVERRIDE_TTL_MS) {
-        pendingOverride.delete(payload.agent.id)
-        return decision
-      }
       pendingOverride.delete(payload.agent.id)
+      // Bound to the exact request it was decided for. Anything else — a later
+      // step, a later turn, an expired entry — drops it instead of applying it,
+      // so a retry that never happened cannot move some future turn's model.
+      if (override.turn !== payload.turn || override.step !== payload.step) return decision
+      if (Date.now() - override.at > OVERRIDE_TTL_MS) return decision
       return { ...decision, provider: override.route, model: override.model }
     })
 
@@ -1647,6 +1725,62 @@ export function apply(ctx, rawConfig) {
       pendingOverride.delete(agent.id)
       for (const key of fallbacksThisTurn.keys()) if (key.startsWith(`${agent.id}/`)) fallbacksThisTurn.delete(key)
     })
+  })
+
+  // ── Proving a switch: a report only after the model that answered is known ──
+  //
+  // The banner used to be written when the switch was decided, so it described an
+  // intention. A retry can fail, be aborted, or run on a third route, and none of
+  // that changed the text the user read. The decision is therefore kept as a
+  // pending record, and promoted to something the user is shown only when a
+  // committed assistant message names the model that actually produced it.
+  //
+  // Registered at the plugin root, like the counters: the event is emitted on the
+  // session's own scope and reaches a root listener, and a missing optional
+  // service must not silently disable the verification.
+  ctx.on('session/event', (session, event) => {
+    const sessionId = cleanString(session?.id)
+    if (sessionId === undefined) return
+    const pending = pendingSwitch.get(sessionId)
+    if (pending === undefined) return
+
+    if (event?.type === 'turn/end') {
+      // The turn ended without a committed message for this switch: it did not
+      // recover. Report the truth — the target was never reached — and stop
+      // carrying the decision.
+      pendingSwitch.delete(sessionId)
+      diagnostics.bySession[sessionId] = {
+        at: Date.now(),
+        from: pending.from,
+        to: pending.to,
+        reason: pending.reason,
+        detail: pending.detail,
+        outcome: 'unreached',
+        sessionSwitched: pending.sessionSwitched,
+        ran: null,
+      }
+      return
+    }
+    if (event?.type !== 'assistant/message') return
+    if (event.data?.turn !== pending.turn) return
+    const source = event.data?.message?.source
+    const ran = typeof source?.provider === 'string' && typeof source?.model === 'string'
+      ? { route: source.provider, model: source.model }
+      : null
+    // Only a message for the turn that was switched can prove anything; a step
+    // number is not checked, because the retry may commit on a later step.
+    pendingSwitch.delete(sessionId)
+    const target = ran !== null && ran.route === pending.to.route && ran.model === pending.to.model
+    diagnostics.bySession[sessionId] = {
+      at: Date.now(),
+      from: pending.from,
+      to: pending.to,
+      reason: pending.reason,
+      detail: pending.detail,
+      outcome: target ? 'reached' : 'ran-elsewhere',
+      sessionSwitched: pending.sessionSwitched,
+      ran,
+    }
   })
 
   // ── Counting: every committed model response, exactly once ──
@@ -1885,7 +2019,31 @@ export function apply(ctx, rawConfig) {
                 ok: true,
                 value: sessionId === undefined ? null : diagnostics.bySession[sessionId] ?? null,
                 refusals: diagnostics.refusals.slice(-20),
+                // Whether this session still allows automatic switching, so the
+                // banner can offer the toggle that matches its current state.
+                autoSwitch: sessionId === undefined ? true : !noAutoSwitch.has(sessionId),
               })
+            }
+            // Undo. The switch now moves the Session's own model, so undoing it
+            // means moving it back — the same call the switch itself made.
+            case 'fallbackRevert': {
+              const sessionId = cleanString(body?.sessionId)
+              const route = cleanString(body?.route)
+              const model = cleanString(body?.model)
+              if (sessionId === undefined || route === undefined || model === undefined) {
+                return json({ ok: false, error: 'fallbackRevert needs sessionId, route and model' }, 400)
+              }
+              const moved = await selectSessionModel(sessionId, { route, model })
+              if (moved.ok !== true) return json({ ok: false, error: moved.why })
+              return json({ ok: true })
+            }
+            // "Stop doing this." Remembered for the session, so the next failure
+            // is left to the stock behaviour instead of moving the model again.
+            case 'fallbackSuppress': {
+              const sessionId = cleanString(body?.sessionId)
+              if (sessionId === undefined) return json({ ok: false, error: 'fallbackSuppress needs sessionId' }, 400)
+              noAutoSwitch.add(sessionId)
+              return json({ ok: true })
             }
             default:
               return json({ ok: false, message: `unknown action "${String(action)}"` }, 400)

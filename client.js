@@ -162,8 +162,23 @@ window.__ModuleLoader__.load({
         unavailable: 'unavailable',
         alsoOn: 'also on',
         selected: 'current',
-        fallbackTitle: 'Model switched automatically',
-        fallbackBody: 'reported an exhausted quota, so this turn continues on',
+        // The report is split by what was PROVEN, not by what was decided: a
+        // switch that never reached the model must not read like one that did.
+        fallbackTitleReached: 'Model switched',
+        fallbackTitleElsewhere: 'Switch did not take effect',
+        fallbackTitleUnreached: 'Switch attempted, turn not recovered',
+        // Per-reason wording. One hardcoded sentence used to claim "exhausted
+        // quota" for every cause, including causes that are not about quota.
+        fallbackReasonQuota: 'quota exhausted',
+        fallbackReasonRetired: 'model no longer served',
+        fallbackReasonProtocol: 'model not supported on that route',
+        fallbackReasonNoAdapter: 'route has no adapter',
+        fallbackReasonRateLimited: 'account rate limited',
+        fallbackReasonError: 'the route reported a failure',
+        fallbackRanOn: 'the turn actually ran on',
+        fallbackRevert: 'Switch back',
+        fallbackSuppress: 'Stop switching',
+        fallbackSuppressed: 'Automatic switching off',
         dismiss: 'Dismiss',
         diagnostics: 'Diagnostics',
         sourceDirectory: 'gateway directory',
@@ -257,8 +272,19 @@ window.__ModuleLoader__.load({
         unavailable: '不可用',
         alsoOn: '同时来自',
         selected: '当前',
-        fallbackTitle: '已自动切换模型',
-        fallbackBody: '额度已用尽，本轮改用',
+        fallbackTitleReached: '已自动切换模型',
+        fallbackTitleElsewhere: '切换未生效',
+        fallbackTitleUnreached: '已尝试切换，本轮未恢复',
+        fallbackReasonQuota: '额度已用尽',
+        fallbackReasonRetired: '模型已下线',
+        fallbackReasonProtocol: '该路由不支持此模型',
+        fallbackReasonNoAdapter: '该路由没有可用的适配器',
+        fallbackReasonRateLimited: '账号被限流',
+        fallbackReasonError: '该路由报错',
+        fallbackRanOn: '本轮实际使用',
+        fallbackRevert: '改回',
+        fallbackSuppress: '不再自动切换',
+        fallbackSuppressed: '已关闭自动切换',
         dismiss: '知道了',
         diagnostics: '诊断',
         sourceDirectory: '网关目录',
@@ -679,9 +705,24 @@ window.__ModuleLoader__.load({
 /* The sort control is a footer, not a row: it stays put while the list scrolls. */
 .llmm-menu-foot{flex:none;margin:3px 0 0;padding:4px 7px 2px;border-top:0.5px solid var(--dsw-alias-border-l3)}
 .llmm-empty{margin:2px 0;padding:12px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:center}
-.llmm-banner{display:flex;align-items:center;gap:8px;padding:6px 10px;border:0.5px solid var(--dsw-alias-state-warn-primary);border-radius:var(--dsw-radius-md);background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}
-.llmm-banner b{font-family:var(--ds-font-family-code);font-weight:500}
-.llmm-banner .llmm-grow{flex:1;min-width:0}
+/* The banner is a bounded block, not a one-line strip. It reports a switch and a
+   reason, and the reason used to be the provider's raw error text inlined in full
+   — up to 400 characters, which is several wrapped lines and made the banner
+   taller than the conversation around it. */
+.llmm-banner{display:flex;align-items:flex-start;gap:8px;padding:6px 10px;border:0.5px solid var(--dsw-alias-state-warn-primary);border-radius:var(--dsw-radius-md);background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);color:var(--dsw-alias-state-warn-label);font-size:12px;line-height:18px}
+.llmm-banner b{font-weight:500}
+.llmm-banner-mark{flex:none;line-height:18px}
+/* The flexible middle owns the wrapping, and is allowed to shrink: the actions
+   beside it never shrink, so a long model id cannot push them out of view. */
+.llmm-banner-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.llmm-banner-line{display:flex;align-items:baseline;gap:6px;flex-wrap:wrap;min-width:0}
+.llmm-banner-move{font-family:var(--ds-font-family-code);font-size:12px;line-height:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* One line, with the whole message on hover: the banner states the cause, the
+   provider's exact wording stays available without taking over the composer. */
+.llmm-banner-why{color:var(--dsw-alias-state-warn-label);opacity:.85;font-size:11px;line-height:16px;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;min-width:0}
+.llmm-banner-acts{flex:none;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.llmm-banner-off{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap}
+.llmm-btn-quiet{padding:1px 6px;font-size:11px;line-height:16px}
 `
 
     /**
@@ -1803,20 +1844,32 @@ window.__ModuleLoader__.load({
 
     /**
      * The composer banner that reports an automatic model switch.
+     *
+     * It reports what was proven. The Host records a switch as pending when it is
+     * decided and promotes it only once a committed assistant message names the
+     * model that actually answered, so this never claims a switch that did not
+     * reach the model — which is exactly what the previous version did.
+     *
      * @param {object} props - slot props, including the session id when supplied.
      * @returns {object|null} the banner, or nothing when no switch happened.
      */
     function FallbackBanner(props) {
       const sessionId = typeof props?.sessionId === 'string' ? props.sessionId : ''
       const [note, setNote] = useState(null)
+      const [autoSwitch, setAutoSwitch] = useState(true)
       const [hiddenAt, setHiddenAt] = useState(0)
+      const [busy, setBusy] = useState('')
 
       useEffect(() => {
         if (sessionId === '') return undefined
         let alive = true
         const tick = () => {
           callHost({ action: 'fallbackLog', sessionId })
-            .then((data) => { if (alive) setNote(data.value ?? null) })
+            .then((data) => {
+              if (!alive) return
+              setNote(data.value ?? null)
+              setAutoSwitch(data.autoSwitch !== false)
+            })
             .catch(() => { /* the banner is advisory only */ })
         }
         tick()
@@ -1828,15 +1881,64 @@ window.__ModuleLoader__.load({
       if (note.at <= hiddenAt) return null
       if (Date.now() - note.at > 5 * 60 * 1000) return null
 
-      const from = note.from ? `${note.from.route}/${note.from.model}` : ''
-      const to = note.to ? `${note.to.route}/${note.to.model}` : ''
+      const label = (endpoint) => (endpoint ? `${endpoint.route}/${endpoint.model}` : '')
+      const from = label(note.from)
+      const to = label(note.to)
+      const ran = label(note.ran)
+      // Which of the three things actually happened, in the user's terms.
+      const outcome = note.outcome === 'reached' ? 'reached'
+        : note.outcome === 'unreached' ? 'unreached' : 'elsewhere'
+      const title = t(outcome === 'reached' ? 'fallbackTitleReached'
+        : outcome === 'unreached' ? 'fallbackTitleUnreached' : 'fallbackTitleElsewhere')
+      const reasonKey = `fallbackReason${note.reason === 'quota' ? 'Quota'
+        : note.reason === 'retired' ? 'Retired'
+          : note.reason === 'protocol' ? 'Protocol'
+            : note.reason === 'no_adapter' ? 'NoAdapter'
+              : note.reason === 'rate_limited' ? 'RateLimited' : 'Error'}`
+      const reason = t(reasonKey)
+      const run = async (action, body) => {
+        setBusy(action)
+        try { await callHost({ action, sessionId, ...body }) } catch { /* advisory */ } finally { setBusy('') }
+      }
       return h(React.Fragment, null,
         h(Style),
         h('div', { className: 'llmm-root llmm-banner', role: 'status' },
-          h('span', null, '⚠'),
-          h('span', null, `${t('fallbackTitle')}: `, h('b', null, from)),
-          h('span', { className: 'llmm-grow' }, ` ${t('fallbackBody')} `, h('b', null, to), note.detail ? ` (${note.detail})` : ''),
-          h('button', { type: 'button', className: 'llmm-btn', onClick: () => setHiddenAt(note.at) }, t('dismiss')),
+          h('span', { className: 'llmm-banner-mark', 'aria-hidden': true }, outcome === 'reached' ? '⇄' : '⚠'),
+          h('div', { className: 'llmm-banner-body' },
+            h('div', { className: 'llmm-banner-line' },
+              h('b', null, title),
+              from !== '' ? h('code', { className: 'llmm-banner-move' }, from, ' → ', to) : null,
+            ),
+            // The raw provider text is one clamped line with the whole message on
+            // hover. It used to be inlined in full — up to 400 characters — which
+            // is what made this banner taller than the conversation it sat in.
+            h('div', { className: 'llmm-banner-why', title: note.detail ?? '' },
+              outcome === 'reached'
+                ? reason
+                : `${reason}${ran !== '' ? ` · ${t('fallbackRanOn')} ${ran}` : ''}`,
+            ),
+          ),
+          h('div', { className: 'llmm-banner-acts' },
+            // Undo, only once something was actually switched: it moves the
+            // Session's model back, so it is offered when that is meaningful.
+            outcome === 'reached' && note.from
+              ? h('button', {
+                type: 'button',
+                className: 'llmm-btn llmm-btn-quiet',
+                disabled: busy !== '',
+                onClick: () => run('fallbackRevert', { route: note.from.route, model: note.from.model }),
+              }, t('fallbackRevert'))
+              : null,
+            autoSwitch
+              ? h('button', {
+                type: 'button',
+                className: 'llmm-btn llmm-btn-quiet',
+                disabled: busy !== '',
+                onClick: () => { setAutoSwitch(false); run('fallbackSuppress') },
+              }, t('fallbackSuppress'))
+              : h('span', { className: 'llmm-banner-off' }, t('fallbackSuppressed')),
+            h('button', { type: 'button', className: 'llmm-btn llmm-btn-quiet', onClick: () => setHiddenAt(note.at) }, t('dismiss')),
+          ),
         ),
       )
     }

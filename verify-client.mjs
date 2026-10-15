@@ -1029,6 +1029,90 @@ check('a hidden row can be unhidden from the menu that hid it',
   !pickerSections().some(section => /^(Hidden|已隐藏)/.test(section.title)),
   pickerSections().map(s => s.title).join(' | ').slice(0, 120))
 
+// ── the switch banner reports what was proven ───────────────────────────────
+// The banner used to state a cause it had not verified ("exhausted quota") and
+// inline the provider's raw error, which can be 400 characters. Both are fixed,
+// and both are asserted here rather than described in a comment.
+{
+  const dock = slots.find(s => s.options.id === 'llm-manage-fallback')
+  check('the client half still registers the switch banner', dock !== undefined)
+
+  const bannerFetch = globalThis.fetch
+  let verdict = null
+  globalThis.fetch = async (url, init) => {
+    const payload = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+    if (payload?.action === 'fallbackLog') {
+      return new Response(JSON.stringify({ ok: true, value: verdict, autoSwitch: verdict?.autoSwitch !== false }),
+        { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return bannerFetch(url, init)
+  }
+  // A fresh mount per case: the banner polls the log on mount and its effect is
+  // keyed by session, so re-rendering the same root would keep showing the first
+  // answer instead of re-reading.
+  let bannerHost = null
+  let bannerRoot = null
+  const bannerText = () => bannerHost?.textContent ?? ''
+  const renderBanner = async (next) => {
+    verdict = next
+    if (bannerRoot !== null) {
+      await act(async () => { bannerRoot.unmount() })
+      bannerHost.remove()
+    }
+    bannerHost = window.document.createElement('div')
+    window.document.body.appendChild(bannerHost)
+    bannerRoot = createRoot(bannerHost)
+    await act(async () => {
+      bannerRoot.render(React.createElement(dock.Component, { sessionId: 'sess-banner' }))
+      await new Promise(resolve => setTimeout(resolve, 40))
+    })
+  }
+  const rawDetail = `no adapter registered for provider "${ROUTE}"`
+  await renderBanner({
+    at: Date.now(), from: { route: ROUTE, model: at(0) },
+    to: { route: SECOND_ROUTE, model: at(1) }, reason: 'no_adapter', detail: rawDetail,
+    outcome: 'unreached', ran: null, sessionSwitched: false,
+  })
+  check('the banner names the actual cause instead of always claiming quota',
+    /没有可用的适配器|no adapter|route has no adapter/i.test(bannerText())
+    && !/额度已用尽|exhausted quota/i.test(bannerText()),
+    bannerText().slice(0, 120))
+  check('the raw provider text is not inlined in full',
+    !bannerText().includes(rawDetail),
+    bannerText().includes(rawDetail) ? 'the whole 400-character message is rendered' : 'detail kept out of the text')
+  // It is still available, on hover, rather than dropped.
+  const why = bannerHost.querySelector('.llmm-banner-why')
+  check('the full provider message stays available on hover',
+    why?.getAttribute('title') === rawDetail, why?.getAttribute('title') ?? 'no title')
+  check('an unreached switch does not offer to switch back',
+    !/改回|Switch back/i.test(bannerText()), bannerText().slice(0, 120))
+  check('the banner offers to stop future switches',
+    /不再自动切换|Stop switching/i.test(bannerText()), bannerText().slice(0, 120))
+
+  await renderBanner({
+    at: Date.now(), from: { route: ROUTE, model: at(0) },
+    to: { route: SECOND_ROUTE, model: at(1) }, reason: 'quota', detail: 'quota exhausted',
+    outcome: 'reached', ran: { route: SECOND_ROUTE, model: at(1) }, sessionSwitched: true,
+  })
+  check('a proven switch reports success and offers the way back',
+    /已自动切换模型|Model switched/i.test(bannerText()) && /改回|Switch back/i.test(bannerText()),
+    bannerText().slice(0, 140))
+
+  await renderBanner({
+    at: Date.now(), from: { route: ROUTE, model: at(0) },
+    to: { route: SECOND_ROUTE, model: at(1) }, reason: 'quota', detail: 'quota exhausted',
+    outcome: 'ran-elsewhere', ran: { route: ROUTE, model: at(0) }, sessionSwitched: false,
+  })
+  check('a switch that ran elsewhere says which model actually answered',
+    /切换未生效|did not take effect/i.test(bannerText())
+    && /本轮实际使用|actually ran on/i.test(bannerText()),
+    bannerText().slice(0, 140))
+
+  await act(async () => { bannerRoot.unmount() })
+  bannerHost.remove()
+  globalThis.fetch = bannerFetch
+}
+
 // ── the picker and the panel must stay one design ───────────────────────────
 // The stylesheet lives in a template literal, so a single backtick or `${` inside a
 // CSS comment truncates it. The module still parses in some of those shapes — the
@@ -1206,8 +1290,10 @@ check('no rule draws a solid 1px hairline where the design system uses 0.5px',
 // than a hardcoded platform stack, which ignored whatever the app sets.
 check('model ids use the app\'s code font, not a hardcoded stack',
   (declarationsOf('.llmm-name')?.['font-family'] ?? '') === 'var(--ds-font-family-code)'
-  && (declarationsOf('.llmm-banner b')?.['font-family'] ?? '') === 'var(--ds-font-family-code)',
-  `name=${declarationsOf('.llmm-name')?.['font-family']} banner=${declarationsOf('.llmm-banner b')?.['font-family']}`)
+  // The banner's model ids moved into a <code> once the bold run became the
+  // title; the code face follows the identifiers, not the emphasis.
+  && (declarationsOf('.llmm-banner-move')?.['font-family'] ?? '') === 'var(--ds-font-family-code)',
+  `name=${declarationsOf('.llmm-name')?.['font-family']} banner=${declarationsOf('.llmm-banner-move')?.['font-family']}`)
 
 // The card must not be painted with the overlay/scrim token. That was the grey card:
 // --dsw-alias-bg-overlay is documented as "Overlay and popover background" but

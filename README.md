@@ -22,7 +22,7 @@ one flat list. Five things then go wrong at once, and none of them is the gatewa
 | A long list, favorites buried | Pin and favorite models; the picker lifts them into their own sections at the top, and the panel sorts pinned → favorite → recent → rest |
 | No sense of which models you actually rely on | A local ledger levels each model by how often you use it and ranks the rest by 14-day heat, shown as a **Most used** card in the panel and a ranked section in the picker |
 | Retired models still listed; selecting one errors | Reconciles the route's `models:` list against the gateway's own `GET {baseURL}/models` directory and flags anything missing as retired |
-| Quota exhausted, manual switching | Watches `agent/request-error`, switches to the next usable model on a model-scoped quota failure, and shows a banner naming the model it moved for |
+| Quota exhausted, manual switching | Watches `agent/request-error`, moves the session to the next usable model on a model-scoped failure, and reports the switch only once the model that answered confirms it |
 | The same model served by several providers | Marks each row with how many other routes also serve it, instead of hiding the copies |
 | Models that cannot be called at all | Probes with a minimal request and labels the incompatibility honestly |
 
@@ -97,18 +97,26 @@ automatic switches happen per turn.
 
 The rule is **scope**, not severity:
 
-| Failure | Scope | Switches? |
-|---|---|---|
-| model not found / retired | one model | yes |
-| wrong protocol for this route | one model | yes |
-| per-model quota exhausted | one model | yes |
-| other per-model failures | one model | yes |
-| account-wide rate limit | the whole API key | **never** |
-| account-wide quota | the whole API key | **never** |
+| Failure | Scope | Switches? | Recorded against the model? |
+|---|---|---|---|
+| model not found / retired | one model | yes | yes |
+| wrong protocol for this route | one model | yes | yes |
+| per-model quota exhausted | one model | yes | yes |
+| other per-model failures | one model | yes | yes |
+| no adapter registered for this route | the whole route | yes | **no** |
+| account-wide rate limit | the whole API key | **never** | no |
+| account-wide quota | the whole API key | **never** | no |
 
 A model-scoped failure moves to another model, because a different model can serve the
 turn. An account-scoped failure never moves: every model shares that key, so switching
 would only hide the real problem and burn another request.
+
+A **route with no adapter** is its own scope. Switching models *on that route* cannot
+help — every model there fails the same way — but switching to another provider can, so
+it still switches. What it must not do is land in the model's health record: `error` is
+in the set of reasons that make the fallback chain skip a model, and unlike `quota` that
+verdict has no staleness escape, so a single route misconfiguration would have removed
+an innocent model from every future chain permanently.
 
 ### A probe is not a routing event
 
@@ -133,6 +141,41 @@ Concretely, with `model-gamma` selected and its quota exhausted:
 
 At most three automatic switches happen per turn, and if the chain finds nothing usable the
 failure is passed through untouched rather than retried in a way that cannot succeed.
+
+### The switch happens, and the banner proves it
+
+Two mechanisms move a model, and the difference matters:
+
+- **The session's own selection** (`sessionController.selectModel`) is what makes the
+  change real. It validates the target against a registered adapter and appends a durable
+  `model/selection` event, so the model the conversation uses actually changes and every
+  surface agrees. The saved **default model is put back** afterwards: an automatic
+  recovery has no business permanently changing which model new sessions start on.
+- **A per-request override**, bound to the exact turn and step it was decided for, is what
+  recovers the turn already in flight. It is needed because the harness applies the
+  session selection during prompt assembly, which happens once per step — before the retry
+  loop — so the session change alone would only take effect on the *next* turn.
+
+The banner then reports what was **proven**, not what was decided. A switch is recorded as
+pending, and only promoted to something you are shown once a committed assistant message
+names the model that actually produced the response:
+
+| What the answering model was | What the banner says |
+|---|---|
+| the model we switched to | *Model switched*, with **Switch back** |
+| a different model | *Switch did not take effect*, naming the model that actually ran |
+| no message — the turn ended | *Switch attempted, turn not recovered* |
+
+The earlier version wrote the banner when the switch was decided, so a retry that failed,
+was aborted, or ran on a third route produced the same "switched automatically" text. It
+also hardcoded "exhausted quota" as the cause for every failure, including failures that
+were not about quota at all. Each reason now has its own wording, and the provider's raw
+message is one clamped line with the full text on hover — inlined in full it was up to 400
+characters, which made the banner taller than the conversation around it.
+
+Two controls sit on the banner: **Switch back** (offered only once a switch was confirmed,
+since it moves the session's model back) and **Stop switching**, which suppresses automatic
+switching for that session until the harness restarts.
 
 Some gateways report a *model's* quota exhaustion as HTTP 429, which the harness's own
 classifier maps to a retryable `RATE_LIMIT` — indistinguishable from an account-wide rate

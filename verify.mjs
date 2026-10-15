@@ -99,12 +99,31 @@ const settingsService = {
  * @type {{ listSessions: () => Promise<object[]>, readSession: (id: string) => Promise<object> }}
  */
 let sessionQueryFixture = { listSessions: async () => [], readSession: async () => ({ events: [] }) }
+/**
+ * Records what the fallback asks the Session to become, and what it does to the
+ * saved default. Both are real Host services; the suite supplies them so the
+ * switch itself — not just the record of it — is observable.
+ */
+const sessionCalls = []
+const savedDefaults = []
+const sessionController = {
+  selectModel: async (request) => {
+    sessionCalls.push({ ...request })
+    return { selected: { provider: request.provider, model: request.model } }
+  },
+}
+const agentDefaultModel = {
+  currentSelection: () => ({ provider: ROUTE, model: at(0) }),
+  saveSelection: async (next) => { savedDefaults.push({ ...next }) },
+}
 const hostGet = (k) => {
   if (k === 'connection') return connection
   if (k === 'settings') return settingsService
   if (k === 'credentials') return { resolve: async () => ({ value: API_KEY, source: 'test' }) }
   if (k === 'llm') return llmService
   if (k === 'sessionQuery') return sessionQueryFixture
+  if (k === 'sessionController') return sessionController
+  if (k === 'agentDefaultModel') return agentDefaultModel
   return undefined
 }
 const llmService = {
@@ -280,10 +299,10 @@ async function observe(target, model) {
  * @param {string} model - the model the caller asked for.
  * @returns {Promise<string>} the model the loop would use.
  */
-async function observeAndRead(target, model) {
+async function observeAndRead(target, model, turn = 1) {
   let decision = { provider: ROUTE, model }
   for (const l of listeners['agent/request'] ?? []) {
-    decision = await l.call({}, { agent: target, turn: 1, step: 1, signal: new AbortController().signal },
+    decision = await l.call({}, { agent: target, turn, step: 1, signal: new AbortController().signal },
       () => Promise.resolve(decision))
   }
   return decision.model
@@ -331,11 +350,6 @@ for (const [index, c] of CASES.entries()) {
   check(c.label, (action?.kind === 'retry') === c.retry, `retry=${action?.kind === 'retry'}`)
 }
 
-// ── a switch must be visible to the conversation it happened in ─────────────
-const log = await call({ action: 'fallbackLog', sessionId: 'sess-1' })
-check('fallback banner data is scoped to the switched session',
-  log.body?.value?.from?.model !== undefined && log.body?.value?.to?.model !== undefined)
-check('an unrelated session gets no banner', (await call({ action: 'fallbackLog', sessionId: 'sess-never-used' })).body?.value === null)
 
 // ── a probe is not a routing event ──────────────────────────────────────────
 // The two are easy to conflate because both end in a verdict of "unusable", but
@@ -630,6 +644,120 @@ const lateLedger = await call2({ action: 'usage' })
 check('a backend that appears after apply still gets its logs counted',
   lateLedger.body?.value?.models?.find(entry => entry.model === 'late-model')?.uses === 1,
   `models=${lateLedger.body?.value?.models?.map(e => `${e.model}:${e.uses}`).join(',')}`)
+
+// ── a switch is reported only once the model that answered is known ─────────
+// The banner used to be written when the switch was DECIDED, so it described an
+// intention: a retry that failed, was aborted, or ran on a third route produced
+// the same "switched automatically" text either way. That is the report this
+// suite now refuses to accept, because it is the one the user could not
+// reproduce in the conversation.
+const emitSession = (sessionId, event) => {
+  for (const cb of listeners['session/event'] ?? []) cb({ id: sessionId }, event)
+}
+const messageEvent = (model, turn = 1) => ({
+  type: 'assistant/message',
+  seq: 1,
+  time: Date.now(),
+  data: { turn, step: 1, message: { role: 'assistant', source: { kind: 'model', provider: ROUTE, model } }, stream: [] },
+})
+/** Fail one model on a fresh session, exactly as the loop would. */
+const decideSwitch = async (n, failedModel) => {
+  const target = AGENT_FOR(n)
+  await observe(target, failedModel)
+  await fireError(target, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  return target
+}
+const logFor = async (sessionId) => (await call({ action: 'fallbackLog', sessionId })).body?.value ?? null
+
+const undecided = await decideSwitch(30, at(2))
+check('a decided switch is not reported before anything proves it',
+  await logFor('sess-30') === null, String(await logFor('sess-30')))
+
+emitSession('sess-30', { type: 'turn/end', seq: 2, time: Date.now(), data: { turn: 1, reason: { kind: 'error', error: { message: 'quota exhausted', code: 'RATE_LIMIT' } } } })
+const unreached = await logFor('sess-30')
+check('a turn that ends without a committed message reports the switch as unreached',
+  unreached?.outcome === 'unreached' && unreached?.to?.model !== undefined,
+  JSON.stringify(unreached?.outcome ?? null))
+// The target is deterministic for a given failure, so the same scenario twice
+// resolves to the same model — which the reached case below relies on.
+const target = unreached?.to
+
+// The message that answers names a DIFFERENT model: the state the old code could
+// not distinguish from a successful switch, because it never looked.
+await decideSwitch(31, at(2))
+emitSession('sess-31', messageEvent(at(2)))
+const elsewhere = await logFor('sess-31')
+check('a switch that did not take effect is reported as not taking effect',
+  elsewhere?.outcome === 'ran-elsewhere' && elsewhere?.ran?.model === at(2),
+  `outcome=${elsewhere?.outcome} ran=${elsewhere?.ran?.model ?? 'null'}`)
+
+// And the honest success case still reports success.
+await decideSwitch(32, at(2))
+emitSession('sess-32', messageEvent(target.model))
+const reached = await logFor('sess-32')
+check('a switch the answering model confirms is reported as reached',
+  reached?.outcome === 'reached' && reached?.to?.model === target.model,
+  `outcome=${reached?.outcome} to=${reached?.to?.model ?? 'null'} asked=${target.model}`)
+check('an unrelated session gets no banner', (await call({ action: 'fallbackLog', sessionId: 'sess-never-used' })).body?.value === null)
+
+// ── a provider-level fault must not blacklist the model ─────────────────────
+// "No adapter registered for provider" says nothing about any model on the route:
+// every model there would fail the same way. Recording it against the selected
+// model put it in UNUSABLE_REASONS, and unlike QUOTA that verdict has no
+// staleness escape, so one route misconfiguration removed a model from every
+// later fallback chain permanently.
+{
+  const providerAgent = AGENT_FOR(33)
+  await observe(providerAgent, at(1))
+  const healthOf = async () => (await call({ action: 'snapshot' })).body?.value?.groups
+    ?.flatMap(g => g.rows).find(r => r.model === at(1))?.status
+  const before = await healthOf()
+  const action = await fireError(providerAgent, {
+    code: 'NO_ADAPTER', status: 400, message: 'no adapter registered for provider "example-route"',
+  })
+  check('a route with no adapter is still switchable', action?.kind === 'retry', `action=${action?.kind ?? 'none'}`)
+  // The assertion has to be "the record did not change", not "it is not error":
+  // the fault now carries its own reason, so a status comparison against one
+  // value passes whether or not the model was written to. What matters is that a
+  // provider-scope fault leaves no mark on a model the provider never reached.
+  const after = await healthOf()
+  check('a route with no adapter leaves the model record untouched', after === before,
+    `before=${before ?? 'none'} after=${after ?? 'none'}`)
+}
+
+// ── the switch is real, and it does not take the default with it ────────────
+// A turn-scoped override alone recovers the retry and changes nothing durable,
+// which is why a banner could claim a switch the session never made. The Session
+// itself has to move — and an automatic recovery must not rewrite the model new
+// sessions start on.
+{
+  const before = sessionCalls.length
+  const defaultsBefore = savedDefaults.length
+  const durable = AGENT_FOR(35)
+  await observe(durable, at(2))
+  await fireError(durable, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  const asked = sessionCalls.slice(before)
+  check('the session itself is moved, not just the retried request',
+    asked.length === 1 && asked[0].sessionId === 'sess-35' && asked[0].model !== at(2),
+    asked.map(c => `${c.sessionId}:${c.model}`).join(',') || 'no session call')
+  const restored = savedDefaults.slice(defaultsBefore)
+  check('an automatic switch puts the saved default model back',
+    restored.length >= 1 && restored[restored.length - 1].model === at(0),
+    restored.map(d => `${d.provider}/${d.model}`).join(',') || 'default never restored')
+}
+
+// ── the override cannot leak into a later request ───────────────────────────
+// It is set for one exact turn and step. Matching on the session alone meant an
+// override whose retry never happened stayed live for its whole TTL and was then
+// consumed by whatever request came next.
+{
+  const leakAgent = AGENT_FOR(34)
+  await observe(leakAgent, at(2))
+  await fireError(leakAgent, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  const nextTurn = await observeAndRead(leakAgent, at(2), 2)
+  check('an override set for one turn does not move a later turn',
+    nextTurn === at(2), `later turn resolved to ${nextTurn}`)
+}
 
 rmSync(HOME, { recursive: true, force: true })
 const failed = results.filter(r => !r.passed)
