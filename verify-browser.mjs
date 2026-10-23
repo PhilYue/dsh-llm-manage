@@ -91,20 +91,52 @@ const PAGE = `<!doctype html>
     var ROUTE = 'example-route'
     var base = { route: ROUTE, favorite: false, pinned: false, hidden: false, status: 'ok',
       reason: 'answered', source: 'probe', scope: 'model', at: Date.now(), inDirectory: true }
-    var rows = ['Alpha-Model', 'Beta-Model', 'Gamma-Model'].map(function (m) {
+    // One shared model id served by BOTH routes is exactly what the route label is
+    // for, and the case only real layout can measure: the label has to fit inside the
+    // row without colliding with the model name.
+    var SHARED = 'Shared-Model'
+    var rows = ['Alpha-Model', 'Beta-Model', 'Gamma-Model', SHARED].map(function (m) {
       return Object.assign({}, base, { model: m })
     })
-    // One pinned and one favorited row, plus a second route serving a row id that
-    // also exists above. That combination is what the picker's sections and their
-    // route labels exist for, and it is only measurable with real layout.
     rows[1].pinned = true
     rows[2].favorite = true
-    // Every model id here belongs to exactly one route, so a repeated name in the
-    // menu can only mean a lifted row was copied instead of moved. (An id served by
-    // two routes is a legitimate repeat, and verify-client.mjs covers that case
-    // with full route information, which a geometry probe cannot recover.)
-    var mirrorRows = [Object.assign({}, base, { route: 'mirror-route', model: 'Mirror-Model', pinned: true })]
-    var SNAPSHOT = { groups: [
+    // Pinned wherever it is offered, so the row that needs a label sits in a lifted
+    // section — that is where it loses the route heading that used to say it.
+    rows[3].pinned = true
+    var mirrorBase = Object.assign({}, base, { route: 'mirror-route' })
+    var mirrorRows = [
+      Object.assign({}, mirrorBase, { model: 'Mirror-Model', pinned: true }),
+      Object.assign({}, mirrorBase, { model: SHARED, pinned: true }),
+    ]
+    rows[3].alsoOn = ['Mirror']
+    // One unusable row, so the dot colours can be compared: a status dot that is
+    // uniformly one colour is exactly the regression that shipped unnoticed.
+    rows.push(Object.assign({}, base, { model: 'Gone-Model', status: 'retired',
+      reason: 'not listed by the gateway directory', source: 'directory', inDirectory: false }))
+    mirrorRows[1].alsoOn = ['Example Gateway']
+    // The Host reports a model two routes serve as ONE entry whose routes are its
+    // attributes. Serving only 'groups' here would exercise the legacy fallback and
+    // silently skip the shape the product actually ships.
+    var byModel = {}
+    ;[['Example Gateway', rows], ['Mirror', mirrorRows]].forEach(function (pair) {
+      pair[1].forEach(function (row) {
+        var entry = byModel[row.model]
+          || (byModel[row.model] = { model: row.model, name: row.model, routes: [],
+            pinned: false, favorite: false, hidden: false, usage: null })
+        entry.routes.push(Object.assign({}, row, { name: pair[0] }))
+        entry.pinned = entry.pinned || row.pinned === true
+        entry.favorite = entry.favorite || row.favorite === true
+      })
+    })
+    var models = Object.keys(byModel).map(function (key) {
+      var entry = byModel[key]
+      var first = entry.routes[0]
+      return Object.assign({}, entry, {
+        primary: first.route, status: first.status, reason: first.reason,
+        source: first.source, scope: first.scope, at: first.at, inDirectory: first.inDirectory,
+      })
+    })
+    var SNAPSHOT = { models: models, groups: [
       { route: ROUTE, name: 'Example Gateway',
         models: rows.map(function (r) { return r.model }), rows: rows },
       { route: 'mirror-route', name: 'Mirror',
@@ -261,6 +293,13 @@ const PAGE = `<!doctype html>
               // covering the card in the first place.
               var menu = document.querySelector('.llmm-menu')
               log('PICKER_CARD_PARENT=' + (menu && menu.parentElement ? menu.parentElement.tagName : 'none'))
+              // Computed colours, not class names: a class can be right while the token
+              // resolves to the same surface colour for both tones.
+              var dotOf = function (tone) { return menu.querySelector('.llmm-dot.' + tone) }
+              var bgOf = function (node) { return node ? getComputedStyle(node).backgroundColor : 'none' }
+              log('DOT_OK_BG=' + bgOf(dotOf('ok')))
+              log('DOT_BAD_BG=' + bgOf(dotOf('bad')))
+              log('DOT_COUNT=' + menu.querySelectorAll('.llmm-dot').length)
               if (!menu) { log('FAIL picker menu did not open'); done(); return }
               var heads = Array.prototype.slice.call(menu.querySelectorAll('.llmm-group'))
               log('pickerSections=' + heads.map(function (nd) { return nd.textContent }).join(' | '))
@@ -527,6 +566,14 @@ check('only a route-spanning section prints route labels',
   && (line('pickerLabelsPerSection') ?? '').split(',').slice(1).every(entry => entry.endsWith(':0')),
   line('pickerLabelsPerSection'))
 check('a route label never overlaps the model name', line('ROUTE_LABEL_NO_OVERLAP') === 'true')
+// The status dot is the only at-a-glance "can I use this" signal, and no suite
+// asserted its colour — so a key mismatch that turned every dot grey passed review.
+check('the status dot paints the healthy colour, not an empty one',
+  line('DOT_OK_BG') !== 'none' && line('DOT_OK_BG') !== 'rgba(0, 0, 0, 0)',
+  line('DOT_OK_BG'))
+check('an unusable row paints a different dot colour from a healthy one',
+  line('DOT_BAD_BG') !== 'none' && line('DOT_BAD_BG') !== line('DOT_OK_BG'),
+  `ok=${line('DOT_OK_BG')} bad=${line('DOT_BAD_BG')}`)
 check('a route label fits inside its row', line('ROUTE_LABEL_WITHIN_ROW') === 'true')
 check('the menu does not scroll horizontally', line('MENU_ROW_NO_HSCROLL') === 'true')
 

@@ -38,9 +38,16 @@ import {
   route as ROUTE,
   settings as SETTINGS,
   settingsNs as SETTINGS_NS,
+  syntheticGatewayFetch,
 } from './verify-env.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+
+// A second route that serves the same first two models. It is what makes the
+// model-first view testable at all: one model, two routes, one entry. Named to
+// sort after ROUTE so `groups[0]` keeps meaning the primary route.
+const MIRROR_ROUTE = `${ROUTE}-mirror`
+const MIRRORED = MODELS.slice(0, 2)
 
 // The environment (checkout, mode, route, models, profile fields) lives in one
 // shared module so this suite and the browser suite cannot disagree about which
@@ -78,17 +85,25 @@ function mkScope() {
 // The real settings service has NO getter: it publishes one descriptor per
 // active profile entry through describe(), keyed by entry id. Modelling that
 // exactly is what catches a plugin that assumes a getter exists.
+// A settings service that can be WRITTEN, because declaring measured levels goes
+// through the same path the settings UI uses rather than editing the file.
+let settingsValue = SETTINGS
+const settingsWrites = []
 const settingsService = {
   describe: () => [{
     ns: SETTINGS_NS,
     autoGenerate: true,
     schema: {},
-    revision: 1,
+    revision: 1 + settingsWrites.length,
     applies: 'live',
-    value: SETTINGS,
+    value: settingsValue,
     base: SETTINGS,
-    user: SETTINGS,
+    user: settingsValue,
   }],
+  replace: async (ns, section, revision) => {
+    settingsWrites.push({ ns, section: structuredClone(section), revision })
+    settingsValue = section
+  },
 }
 /**
  * The historical-scan fixture behind `ctx.get('sessionQuery')`.
@@ -127,11 +142,16 @@ const hostGet = (k) => {
   return undefined
 }
 const llmService = {
-  listProviders: () => [{ id: ROUTE, name: DISPLAY_NAME }],
+  listProviders: () => [{ id: ROUTE, name: DISPLAY_NAME }, { id: MIRROR_ROUTE, name: MIRROR_ROUTE }],
   // settingsPath is the directory's own path from the section root to this
   // provider's profile; llm-pi-ai declares ['providers', provider].
   listConfigurableProviders: () => [{ provider: ROUTE, displayName: DISPLAY_NAME, settingsNs: SETTINGS_NS, settingsPath: ['providers', ROUTE] }],
-  listModels: async () => MODELS.map(id => ({ id, name: id })),
+  listModels: async (id) => (id === MIRROR_ROUTE ? MIRRORED : MODELS).map(model => ({ id: model, name: model })),
+  // The repair path reads the model's own declaration to choose a valid level.
+  resolveModelInfo: async (provider, model) => ({
+    provider, id: model, name: model,
+    reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'high' },
+  }),
 }
 
 /**
@@ -757,6 +777,207 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
   const nextTurn = await observeAndRead(leakAgent, at(2), 2)
   check('an override set for one turn does not move a later turn',
     nextTurn === at(2), `later turn resolved to ${nextTurn}`)
+}
+
+// ── a level the model does not declare is repaired, not switched away from ──
+// This is the failure the user hit as `does not support reasoning effort "High"`: a
+// stale selection, not a sick model. Switching models would hide it, and recording it
+// against the model would blacklist one that works.
+{
+  const target = AGENT_FOR(41)
+  const requestDecision = async (agent, turn) => {
+    let decision = { provider: ROUTE, model: at(0), reasoningEffort: 'High' }
+    for (const l of listeners['agent/request'] ?? []) {
+      decision = await l.call({}, { agent, turn, step: 1, signal: new AbortController().signal },
+        () => Promise.resolve(decision))
+    }
+    return decision
+  }
+  await observe(target, at(0))
+  const healed = await fireError(target, {
+    code: 'UNSUPPORTED_REASONING_EFFORT',
+    status: 400,
+    message: `provider "${ROUTE}" model "${at(0)}" does not support reasoning effort "High"`,
+  })
+  check('an unsupported level asks for a retry instead of a model switch',
+    healed?.kind === 'retry', JSON.stringify(healed))
+
+  const decision = await requestDecision(target, 1)
+  check('the retry asks for a level the model declares, not the rejected one',
+    decision.reasoningEffort === 'high' && decision.model === at(0), JSON.stringify(decision))
+  const sessionCall = sessionCalls.at(-1)
+  check('the Session is moved to the repaired level, not just the retried request',
+    sessionCall?.model === at(0) && sessionCall?.reasoningEffort === 'high',
+    JSON.stringify(sessionCall ?? null))
+  const modelHealth = (await call({ action: 'snapshot' })).body?.value?.groups
+    ?.flatMap(group => group.rows).find(row => row.model === at(0))?.status
+  check('a level repair is not recorded against the model health',
+    modelHealth !== 'error', `model health=${modelHealth ?? 'none'}`)
+
+  // The same failure twice in one turn must not loop: the second pass declines.
+  const repeated = await fireError(target, {
+    code: 'UNSUPPORTED_REASONING_EFFORT',
+    status: 400,
+    message: 'does not support reasoning effort "High"',
+  })
+  check('a repeated level failure in the same turn does not loop',
+    repeated?.kind !== 'retry', JSON.stringify(repeated ?? null))
+}
+
+// ── a probe measures the levels, not just the health ───────────────────────
+// Declaring a level the gateway refuses is a configuration mistake that surfaces as a
+// failed turn, so the probe answers it directly instead of leaving it to guesswork.
+{
+  // The answer depends on the gateway, so this block swaps in the synthetic one for
+  // the duration: in real mode the same sweep would ask a live gateway about a level
+  // set that belongs to its own models, and the assertion would only be testing the
+  // network. What is being proven here is the sweep's shape, not one vendor's answer.
+  const target = at(2)
+  const realFetch = globalThis.fetch
+  globalThis.fetch = syntheticGatewayFetch
+  let probed
+  try {
+    probed = await call({ action: 'probe', route: ROUTE, model: target })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  const levels = probed.body?.value?.levels
+  check('a probe measures which reasoning levels the gateway accepts',
+    (levels?.accepted ?? []).join(',') === 'low,high,max',
+    JSON.stringify(levels?.accepted ?? null))
+  check('a probe keeps the refused levels instead of dropping them',
+    (levels?.rejected ?? []).map(entry => entry.level).join(',') === 'minimal,medium,xhigh',
+    JSON.stringify((levels?.rejected ?? []).map(entry => entry.level)))
+  const measuredRow = (probed.body?.snapshot?.groups ?? [])
+    .flatMap(group => group.rows).find(row => row.model === target)
+  check('the measured levels reach the snapshot row',
+    (measuredRow?.levels?.accepted ?? []).join(',') === 'low,high,max',
+    JSON.stringify(measuredRow?.levels ?? null))
+  // The probe is the only moment the measurement exists, so the declaration is
+  // written right there: the two-fact split cost the user a click they could not
+  // discover, and a measured level that stays undeclared is offered by nobody.
+  const autoDeclared = probed.body?.value?.declared
+  check('a probe that measures levels declares them in the same call',
+    (autoDeclared?.levels ?? []).join(',') === 'low,high,max',
+    JSON.stringify(autoDeclared ?? null))
+  const autoWrite = settingsWrites.at(-1)
+  const autoModel = autoWrite?.section?.providers?.[ROUTE]?.models?.find(
+    entry => (typeof entry === 'string' ? entry : entry?.id) === target,
+  )
+  check('the automatic declaration reaches the settings service',
+    autoWrite?.ns === SETTINGS_NS
+      && Object.keys(autoModel?.reasoningEfforts ?? {}).join(',') === 'low,high,max',
+    JSON.stringify(autoModel ?? null))
+}
+
+// ── a measured level becomes a declared one, through the settings service ───
+// Measurement alone unlocks nothing: the harness validates a level against the model's
+// DECLARATION, so a level the gateway accepts but the config omits is offered by nobody.
+{
+  const declared = await call({ action: 'declareLevels', route: ROUTE, model: at(2) })
+  check('declaring measured levels reports the levels it wrote',
+    declared.body?.ok === true && (declared.body?.value?.levels ?? []).join(',') === 'low,high,max',
+    JSON.stringify(declared.body?.value ?? declared.body))
+  const write = settingsWrites.at(-1)
+  const written = write?.section?.providers?.[ROUTE]?.models?.find(
+    entry => (typeof entry === 'string' ? entry : entry?.id) === at(2),
+  )
+  check('the declaration is written where the harness reads levels from',
+    written !== undefined && typeof written === 'object'
+      && Object.keys(written.reasoningEfforts ?? {}).join(',') === 'low,high,max',
+    JSON.stringify(written ?? null))
+  check('the declaration goes through the settings service, not a file edit',
+    write?.ns === SETTINGS_NS, write?.ns ?? 'no write')
+
+  // A model nobody probed has nothing to declare, and must not write an empty field.
+  const before = settingsWrites.length
+  const refused = await call({ action: 'declareLevels', route: ROUTE, model: at(9) })
+  check('an unprobed model is refused instead of declaring nothing',
+    refused.body?.ok !== true && settingsWrites.length === before,
+    JSON.stringify(refused.body ?? null))
+}
+
+// ── the mode the client half has to ask for ─────────────────────────────────
+// The client runtime gives a plugin no Loader row config, so the picker's mode can
+// only arrive from here. A missing or misnamed action would leave the client
+// guessing, which is how `selector.mode` was inert in the first place.
+{
+  const response = await call({ action: 'selectorMode' })
+  const value = response.body?.value
+  check('the selectorMode action reports the configured mode',
+    value?.selectorMode === 'managed', `got ${JSON.stringify(value ?? response.body)}`)
+  // One enum is the whole point: it must not drag a model listing along with it.
+  check('the selectorMode action answers without a snapshot',
+    response.body?.snapshot === undefined && value !== undefined,
+    Object.keys(response.body ?? {}).join(','))
+}
+
+// ── the model-first view ────────────────────────────────────────────────────
+// The list's key is the MODEL, not the transport. Two routes serving one model id
+// are one entry carrying two routes, which is what stops a wrapper route (a vision
+// twin today, anything tomorrow) from listing the same model again.
+{
+  const snapshot = (await call({ action: 'snapshot' })).body?.value
+  const models = snapshot?.models ?? []
+  const rows = (snapshot?.groups ?? []).flatMap(group => group.rows)
+  check('the snapshot carries a model-first view', Array.isArray(snapshot?.models) && models.length > 0,
+    `${models.length} model(s)`)
+  check('the model view has one entry per model id, not one per route',
+    models.length < rows.length && new Set(models.map(entry => entry.model)).size === models.length,
+    `${models.length} model(s) vs ${rows.length} route row(s)`)
+
+  const shared = models.find(entry => entry.model === at(0))
+  const sharedRoutes = shared?.routes.map(entry => entry.route).sort().join(',') ?? ''
+  check('a model reachable through two routes is one entry carrying both',
+    shared?.routes.length === 2 && sharedRoutes === [ROUTE, MIRROR_ROUTE].sort().join(','),
+    sharedRoutes || 'no shared model')
+  check('a single-route model carries exactly its own route',
+    (models.find(entry => entry.model === at(3))?.routes ?? []).length === 1,
+    `${(models.find(entry => entry.model === at(3))?.routes ?? []).length} route(s)`)
+
+  const summed = (shared?.routes ?? []).reduce((sum, route) => sum + route.usage.uses, 0)
+  check('usage is summed across a model routes rather than split per route',
+    shared?.usage.uses === summed, `model ${shared?.usage.uses} vs routes ${summed}`)
+
+  // A pin is a statement about the model the user wants, so it must survive being
+  // written on whichever route the row happened to select. Both routes start clear
+  // and only the NON-primary one is pinned: if the model-level flag were resolved
+  // from the primary route alone, this would read as unpinned — which is exactly the
+  // bug a per-route flag would produce.
+  for (const route of [ROUTE, MIRROR_ROUTE]) {
+    await call({ action: 'toggle', route, model: at(1), list: 'pins', on: false })
+  }
+  await call({ action: 'toggle', route: MIRROR_ROUTE, model: at(1), list: 'pins', on: true })
+  const pinned = (await call({ action: 'snapshot' })).body?.value?.models?.find(entry => entry.model === at(1))
+  const primaryRoute = (pinned?.routes ?? []).find(route => route.route === pinned?.primary)
+  check('a pin written on a non-primary route still marks the model pinned',
+    pinned?.pinned === true && primaryRoute?.pinned === false,
+    `model pinned=${pinned?.pinned} primary(${pinned?.primary}).pinned=${primaryRoute?.pinned}`)
+  // Primary is decided by history, not by catalog order — otherwise the tie-break
+  // would be the only thing the earlier assertion tested. Give the mirror route more
+  // recorded use than the base route for one model and the row must follow it.
+  for (let n = 0; n < 5; n += 1) {
+    emit('session/event', { id: 'sess-model-first' }, {
+      type: 'assistant/message',
+      seq: 9000 + n,
+      time: Date.now(),
+      data: {
+        turn: 1,
+        step: 1,
+        message: { role: 'assistant', source: { kind: 'model', provider: MIRROR_ROUTE, model: at(0) } },
+        stream: [],
+        usage: { inputTokens: 10, outputTokens: 5 },
+      },
+    })
+  }
+  const flipped = (await call({ action: 'snapshot' })).body?.value?.models?.find(entry => entry.model === at(0))
+  check('the primary route follows recorded use rather than catalog order',
+    flipped?.primary === MIRROR_ROUTE, `primary=${flipped?.primary}`)
+  const acrossRoutes = (flipped?.routes ?? []).reduce((sum, route) => sum + route.usage.uses, 0)
+  check('a model used on two routes reports one level over both',
+    flipped?.usage.uses === acrossRoutes && acrossRoutes > (flipped?.routes ?? []).reduce(
+      (best, route) => Math.max(best, route.usage.uses), 0),
+    `model ${flipped?.usage.uses} vs routes ${acrossRoutes}`)
 }
 
 rmSync(HOME, { recursive: true, force: true })

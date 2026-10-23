@@ -241,7 +241,23 @@ export const settings = { providers: { [route]: { ...profileFields, models } } }
  * @param {string | URL} url - request target.
  * @returns {Promise<Response>} a synthetic gateway response.
  */
-export async function syntheticGatewayFetch(url) {
+/**
+ * Reasoning levels the synthetic gateway accepts.
+ *
+ * Deliberately NOT all seven: a fixture that accepts everything cannot tell a level
+ * sweep that classified rejections from one that never looked. These three mirror what
+ * the real gateway measured for its thinking models (low/high/max), so a probe test
+ * exercises both the accepted and the rejected branch.
+ */
+export const SYNTHETIC_ACCEPTED_LEVELS = ['low', 'high', 'max']
+
+/**
+ * The stand-in gateway for synthetic mode.
+ * @param {string} url - request URL.
+ * @param {object} [init] - fetch init, whose body may carry `reasoning_effort`.
+ * @returns {Promise<Response>} the canned answer.
+ */
+export async function syntheticGatewayFetch(url, init) {
   const href = String(url)
   const json = (body) => new Response(JSON.stringify(body), {
     status: 200,
@@ -249,6 +265,20 @@ export async function syntheticGatewayFetch(url) {
   })
   if (href.includes('/models')) return json({ data: models.map(id => ({ id, name: id })) })
   if (href.includes('/chat/completions')) {
+    let effort
+    try {
+      effort = JSON.parse(init && typeof init.body === 'string' ? init.body : '{}').reasoning_effort
+    } catch {
+      effort = undefined
+    }
+    if (effort !== undefined && !SYNTHETIC_ACCEPTED_LEVELS.includes(effort)) {
+      return new Response(JSON.stringify({
+        error: {
+          message: `reasoning_effort must be one of ${SYNTHETIC_ACCEPTED_LEVELS.join(', ')}.`,
+          type: 'invalid_request_error',
+        },
+      }), { status: 400, headers: { 'content-type': 'application/json' } })
+    }
     return json({ choices: [{ message: { role: 'assistant', content: 'pong' } }] })
   }
   throw new Error(`synthetic mode has no route for ${href}`)

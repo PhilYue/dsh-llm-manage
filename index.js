@@ -35,6 +35,7 @@ export const name = 'llm-manage'
 const STORE_VERSION = 1
 
 /** Upper bound on retained recent-use rows, newest first. */
+const LEVEL_LIMIT = 12
 const RECENT_LIMIT = 40
 
 /** Upper bound on retained health rows so one huge catalog cannot grow the file without end. */
@@ -141,6 +142,13 @@ const REASON = {
    * not be recorded against the model that happened to be selected.
    */
   NO_ADAPTER: 'no_adapter',
+  /**
+   * The selected reasoning level is not one this model declares. The model is fine
+   * and the route is fine: the SELECTION is stale or was written by something that
+   * spelled a level as its display name. Repairing it is a selection change, so it
+   * must not be recorded against the model's health or spend a fallback.
+   */
+  EFFORT: 'unsupported_effort',
   /** A probe or request failed for any other reason. */
   ERROR: 'error',
   /** Verified reachable. */
@@ -191,6 +199,14 @@ function classifyFailure(failure) {
   const text = `${failure?.code ?? ''} ${failure?.message ?? ''}`
   const code = gatewayCode(text)
   const detail = String(failure?.message ?? '').slice(0, 400)
+
+  // A stale or misspelled reasoning level. Neither the model nor the route is at
+  // fault, so this must not become a health verdict or a model switch — it is a
+  // selection to repair in place.
+  if (failure?.code === 'UNSUPPORTED_REASONING_EFFORT'
+    || /does not support reasoning effort/i.test(text)) {
+    return { reason: REASON.EFFORT, detail, scope: 'effort', switchable: false }
+  }
 
   if (failure?.code === 'NO_ADAPTER' || /no adapter registered for provider/i.test(text)) {
     // The route itself is unusable. Another model on that route cannot help, but
@@ -353,6 +369,40 @@ function usageView(entry, now) {
     trend: recent7 > prior7 ? 'up' : recent7 < prior7 ? 'down' : 'flat',
     seeded: (entry?.seededAt ?? 0) > 0,
   }
+}
+
+/**
+ * Merge one model's usage as recorded on several routes into one raw entry.
+ *
+ * Usage is stored per route, so the same model reached through two routes has two
+ * independent ledgers. Summing the counters before deriving the view is the only
+ * way the level answers "how much have I used this model" rather than "how much
+ * have I used it on this route" — which is also why a vision twin used to halve a
+ * model's apparent proficiency.
+ *
+ * @param {readonly (object | undefined)[]} entries - raw entries, any order.
+ * @returns {object | undefined} the merged raw entry, or undefined when none exists.
+ */
+function mergeRouteUsage(entries) {
+  const live = entries.filter(entry => entry !== undefined && entry !== null)
+  if (live.length === 0) return undefined
+  if (live.length === 1) return live[0]
+  const merged = { uses: 0, attempts: 0, in: 0, out: 0, firstAt: 0, lastAt: 0, days: {}, seededAt: 0 }
+  for (const entry of live) {
+    merged.uses += entry.uses ?? 0
+    merged.attempts += entry.attempts ?? 0
+    merged.in += entry.in ?? 0
+    merged.out += entry.out ?? 0
+    const first = entry.firstAt ?? 0
+    // 0 means "never recorded", so it must not win a minimum against a real time.
+    if (first !== 0) merged.firstAt = merged.firstAt === 0 ? first : Math.min(merged.firstAt, first)
+    merged.lastAt = Math.max(merged.lastAt, entry.lastAt ?? 0)
+    for (const [day, count] of Object.entries(entry.days ?? {})) {
+      merged.days[day] = (merged.days[day] ?? 0) + count
+    }
+    merged.seededAt = Math.max(merged.seededAt, entry.seededAt ?? 0)
+  }
+  return merged
 }
 
 /**
@@ -558,6 +608,10 @@ function emptyOverlay() {
     health: {},
     usage: {},
     seeded: {},
+    
+    // Measured reasoning levels, per model: an answer the gateway gave, kept beside
+    // the health verdict for the same reason — both are measurements, not settings.
+    levels: {},
   }
 }
 
@@ -655,6 +709,32 @@ function normalizeOverlay(raw) {
       }
     }
   }
+  // Measured reasoning levels. Normalized like health rather than stored verbatim: these
+  // documents outlive the code that wrote them, and a sweep is bounded by the same budget
+  // as a health record, so a corrupt file must not grow the snapshot without limit.
+  const levels = {}
+  if (raw.levels !== null && typeof raw.levels === 'object' && !Array.isArray(raw.levels)) {
+    for (const [key, value] of Object.entries(raw.levels)) {
+      if (key === '' || value === null || typeof value !== 'object') continue
+      const accepted = Array.isArray(value.accepted)
+        ? value.accepted.filter(level => typeof level === 'string' && level !== '').slice(0, LEVEL_LIMIT)
+        : []
+      const rejected = Array.isArray(value.rejected)
+        ? value.rejected
+          .filter(entry => entry !== null && typeof entry === 'object')
+          .map(entry => ({
+            level: typeof entry.level === 'string' ? entry.level : '',
+            status: typeof entry.status === 'number' ? entry.status : 0,
+            message: typeof entry.message === 'string' ? entry.message.slice(0, 240) : '',
+          }))
+          .filter(entry => entry.level !== '')
+          .slice(0, LEVEL_LIMIT)
+        : []
+      if (accepted.length === 0 && rejected.length === 0) continue
+      levels[key] = { accepted, rejected, at: typeof value.at === 'number' ? value.at : 0 }
+    }
+  }
+  
   // Backfilled session ids. They live in the overlay so the watermark survives a
   // restart: without it, every start would re-scan the same logs and count them
   // a second time.
@@ -675,6 +755,7 @@ function normalizeOverlay(raw) {
     favorites: refs(raw.favorites),
     pins: refs(raw.pins),
     hidden: refs(raw.hidden),
+    levels,
     recent: Array.isArray(raw.recent)
       ? raw.recent
         .map(entry => (entry !== null && typeof entry === 'object'
@@ -736,7 +817,9 @@ export function apply(ctx, rawConfig) {
   /** Routes whose gateway directory was fetched, and when. */
   const directoryCache = new Map()
   /** Diagnostics counters, surfaced through the tool so the user can see real behaviour. */
-  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, refusals: [], bySession: {}, usageCounted: 0, usageSeed: undefined }
+  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, refusals: [], bySession: {}, usageCounted: 0, usageSeed: undefined, effortHeals: [] }
+  /** Level repairs per agent/turn, so a truly broken config cannot loop. */
+  const effortHealAttempts = new Set()
 
   /**
    * Record one health verdict for a model.
@@ -1329,11 +1412,193 @@ export function apply(ctx, rawConfig) {
    * @param {string} model - model id.
    * @returns {Promise<object>} the classification for this model.
    */
+  /**
+   * Levels a level sweep offers to the gateway, in escalation order.
+   *
+   * These are the ids this plugin's surfaces can carry, not a guess at what any one
+   * model supports: `off` is absent because DSH expresses it by OMITTING the field,
+   * which the ordinary probe already covers, and `minimal`/`xhigh` are included so a
+   * model that accepts them is discovered instead of assumed away.
+   */
+  const REASONING_PROBE_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+  /**
+   * Ask the gateway which reasoning levels it accepts for one model.
+   *
+   * One tiny request per candidate, deliberately NOT part of a batch sweep: that would
+   * multiply a sweep's cost by the number of candidates. The point is to replace
+   * "declare three levels and hope" with a measurement, so a declaration can be spelled
+   * from what the gateway accepts and a level the model refuses stops being offered as
+   * if it worked.
+   *
+   * @param {string} route - provider route id.
+   * @param {string} model - model id.
+   * @returns {Promise<object|undefined>} `{ accepted, rejected, at }`, or undefined when
+   *   the route exposes no baseURL to probe.
+   */
+  async function probeLevels(route, model) {
+    const profile = routeProfile(route)
+    if (profile?.baseURL === undefined) return undefined
+    const apiKey = await routeApiKey(route)
+    const url = `${profile.baseURL.replace(/\/+$/, '')}/chat/completions`
+    const headers = { accept: 'application/json', 'content-type': 'application/json' }
+    if (apiKey !== undefined) headers.authorization = `Bearer ${apiKey}`
+    for (const [header, value] of Object.entries(profile.headers ?? {})) headers[header] = value
+    const accepted = []
+    const rejected = []
+    // Sequential on purpose: this gateway rejects concurrent requests over a small
+    // limit, so a parallel sweep would manufacture the failures it is measuring.
+    for (const level of REASONING_PROBE_LEVELS) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), config.probe.timeoutMs)
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            model,
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'ping' }],
+            reasoning_effort: level,
+          }),
+          signal: controller.signal,
+        })
+        const text = (await response.text()).slice(0, 400)
+        if (response.ok) accepted.push(level)
+        else rejected.push({ level, status: response.status, message: cleanString(text) ?? '' })
+      } catch (error) {
+        rejected.push({
+          level,
+          status: 0,
+          message: error instanceof Error ? error.message : String(error),
+        })
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    return { accepted, rejected, at: Date.now() }
+  }
+
+  /**
+   * Probe a route that has no pi-ai HTTP profile through the adapter it actually uses.
+   *
+   * The built-in providers (and any wrapper that registers an adapter) have no
+   * `providers[...]` entry, so the raw-HTTP probe had nothing to call and reported the
+   * route as failing — painting healthy rows red. Going through `llm.stream` tests the
+   * path DSH itself would use, which is what "can I use this" actually means.
+   *
+   * @param {string} route - provider route id.
+   * @param {string} model - model id.
+   * @returns {Promise<object>} a health verdict shaped like {@link probeModel}'s.
+   */
+  async function probeViaAdapter(route, model) {
+    const registry = llm()
+    if (registry === undefined || typeof registry.stream !== 'function') {
+      return {
+        reason: REASON.ERROR,
+        detail: `route "${route}" has neither an HTTP endpoint nor an adapter to probe`,
+        scope: 'route',
+      }
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), config.probe.timeoutMs)
+    try {
+      const stream = registry.stream({
+        provider: route,
+        model,
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+        maxTokens: 1,
+        signal: controller.signal,
+      })
+      // One chunk proves the adapter resolved credentials, built a request and got an
+      // answer. Breaking releases the stream, which aborts the rest of the response —
+      // a probe must not pay for a whole completion.
+      for await (const chunk of stream) {
+        void chunk
+        break
+      }
+      return { reason: REASON.OK, detail: 'adapter accepted the call', scope: 'model' }
+    } catch (error) {
+      return classifyFailure({
+        code: error !== null && typeof error === 'object' ? error.code : undefined,
+        message: error instanceof Error ? error.message : String(error),
+        status: undefined,
+      })
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Write the measured reasoning levels into the route's own configuration.
+   *
+   * Measurement alone cannot enable switching: the harness validates a level against
+   * what the model DECLARES, so a level the gateway accepts but the config omits is
+   * offered by nobody. This turns the probe's answer into a declaration through the
+   * settings service — the same write path the settings UI uses — instead of editing
+   * the file behind the user's back.
+   *
+   * @param {string} route - provider route id.
+   * @param {string} model - model id.
+   * @returns {Promise<{ ok: true, levels: string[] } | { ok: false, why: string }>} outcome.
+   */
+  async function declareLevels(route, model) {
+    const overlay = await store.read(route)
+    const measured = overlay.levels?.[model]?.accepted ?? []
+    if (measured.length === 0) {
+      return { ok: false, why: 'no measured levels yet — probe the model first' }
+    }
+    const settings = ctx.get('settings')
+    if (settings === undefined || typeof settings.describe !== 'function' || typeof settings.replace !== 'function') {
+      return { ok: false, why: 'this host exposes no writable settings service' }
+    }
+    const registry = llm()
+    let entry
+    try {
+      entry = (registry?.listConfigurableProviders?.() ?? []).find(candidate => candidate.provider === route)
+    } catch {
+      entry = undefined
+    }
+    if (entry === undefined || entry.settingsNs === undefined) {
+      return { ok: false, why: `route "${route}" is not configurable from this host's settings` }
+    }
+    const descriptor = settings.describe().find(row => row.ns === entry.settingsNs)
+    if (descriptor === undefined || descriptor.value === null || typeof descriptor.value !== 'object') {
+      return { ok: false, why: `settings namespace "${entry.settingsNs}" carries no value to edit` }
+    }
+    const path = Array.isArray(entry.settingsPath) && entry.settingsPath.length > 0
+      ? entry.settingsPath
+      : ['providers', route]
+    const models = walkPath(descriptor.value, [...path, 'models'])
+    if (!Array.isArray(models)) return { ok: false, why: 'this route declares no model list in settings' }
+    const index = models.findIndex(candidate => (typeof candidate === 'string' ? candidate : candidate?.id) === model)
+    if (index === -1) return { ok: false, why: `model "${model}" is not declared in this route's settings` }
+    const declared = Object.fromEntries(measured.map(level => [level, level]))
+    const next = structuredClone(descriptor.value)
+    const targets = walkPath(next, [...path, 'models'])
+    // A string shorthand entry becomes an object: the declaration needs a field to live
+    // in, and every accepted shape spells a model as either an id or a record.
+    targets[index] = typeof targets[index] === 'string'
+      ? { id: targets[index], name: targets[index], reasoningEfforts: declared }
+      : { ...targets[index], reasoningEfforts: declared }
+    try {
+      await settings.replace(entry.settingsNs, next, descriptor.revision)
+    } catch (error) {
+      return { ok: false, why: `the settings write was refused: ${error instanceof Error ? error.message : String(error)}` }
+    }
+    try {
+      ctx.logger?.info?.('llm-manage: declared measured levels %s for %s/%s', measured.join('/'), route, model)
+    } catch {
+      // Logging is diagnostic only.
+    }
+    return { ok: true, levels: measured }
+  }
+
   async function probeModel(route, model) {
     const profile = routeProfile(route)
-    if (profile?.baseURL === undefined) {
-      return { reason: REASON.ERROR, detail: `route "${route}" exposes no baseURL to probe`, scope: 'route' }
-    }
+    // No pi-ai profile means the raw-HTTP probe has nothing to call. Fall back to the
+    // adapter so a built-in provider is measured by the path it actually serves.
+    if (profile?.baseURL === undefined) return probeViaAdapter(route, model)
     const apiKey = await routeApiKey(route)
     const url = `${profile.baseURL.replace(/\/+$/, '')}/chat/completions`
     const controller = new AbortController()
@@ -1377,6 +1642,9 @@ export function apply(ctx, rawConfig) {
     await flushUsage()
     const now = Date.now()
     const groups = await catalog()
+    // Raw ledgers by route/model, kept out of the serialized rows: the per-model
+    // view below needs them to sum across routes, and nothing else does.
+    const rawUsage = new Map()
     const directories = new Map()
     const merged = []
     for (const group of groups) {
@@ -1390,6 +1658,7 @@ export function apply(ctx, rawConfig) {
       directories.set(group.route, directory)
       const rows = []
       for (const model of group.models) {
+        rawUsage.set(keyOf(group.route, model), overlay.usage?.[model])
         const health = overlay.health[keyOf(group.route, model)]
         const inDirectory = directory.ok === true ? directory.ids.has(model) : undefined
         // The gateway directory outranks a stale probe: a model the gateway no
@@ -1409,6 +1678,10 @@ export function apply(ctx, rawConfig) {
           scope: health?.scope ?? 'model',
           at: inDirectory === false ? directory.at : health?.at ?? 0,
           inDirectory,
+          // Measured, not declared: what the gateway actually accepted last time
+          // someone asked. Null means "never probed", which is different from "this
+          // model has no levels" and must stay distinguishable on the surface.
+          levels: overlay.levels?.[model] ?? null,
           usage: usageView(overlay.usage?.[model], now),
         })
       }
@@ -1461,6 +1734,72 @@ export function apply(ctx, rawConfig) {
       for (const row of group.rows) row.alsoOn = (byModel.get(row.model) ?? []).filter(route => route !== row.route)
     }
 
+    // ── the model-first view ─────────────────────────────────────────────────
+    // The route is how DSH reaches a model, not what the user is choosing, so the
+    // list this serves is keyed by model and carries its routes as attributes.
+    // Deriving it here rather than in the renderer is what lets a wrapper route — a
+    // vision twin, an alias, a future wrapper — merge without the client knowing its
+    // naming: two entries are the same model exactly when their ids match, which is
+    // the only rule that survives an unannounced third party.
+    const modelsByKey = new Map()
+    for (const group of merged) {
+      for (const row of group.rows) {
+        const entry = modelsByKey.get(row.model) ?? { model: row.model, routes: [] }
+        entry.routes.push({
+          route: row.route,
+          name: group.name,
+          status: row.status,
+          reason: row.reason,
+          source: row.source,
+          scope: row.scope,
+          at: row.at,
+          inDirectory: row.inDirectory,
+          levels: row.levels,
+          pinned: row.pinned,
+          favorite: row.favorite,
+          hidden: row.hidden,
+          usage: row.usage,
+        })
+        modelsByKey.set(row.model, entry)
+      }
+    }
+    const models = [...modelsByKey.values()].map((entry) => {
+      // The primary route is what a click selects when the user has not said
+      // otherwise. Usage decides, not naming: the route already in use is the one to
+      // keep using, and a freshly registered wrapper has no history to win with.
+      // Ties fall back to catalog order, which is stable across refreshes.
+      const primary = entry.routes.reduce(
+        (best, route) => (route.usage.uses > best.usage.uses ? route : best),
+        entry.routes[0],
+      )
+      const any = field => entry.routes.some(route => route[field] === true)
+      return {
+        model: entry.model,
+        name: entry.model,
+        primary: primary.route,
+        routes: entry.routes,
+        // Pinned/favorited/hidden are statements about the model the user wants, not
+        // about a transport: keeping them per route would put one model in two
+        // sections at once.
+        pinned: any('pinned'),
+        favorite: any('favorite'),
+        hidden: any('hidden'),
+        status: primary.status,
+        reason: primary.reason,
+        source: primary.source,
+        scope: primary.scope,
+        at: primary.at,
+        inDirectory: primary.inDirectory,
+        // The gateway answer for the route a click would use. Per-route values live in
+        // `routes`, so a wrapper that measured differently stays distinguishable.
+        levels: primary.levels ?? null,
+        usage: usageView(
+          mergeRouteUsage(entry.routes.map(route => rawUsage.get(keyOf(route.route, entry.model)))),
+          now,
+        ),
+      }
+    })
+
     // "Which models do I actually work with" is a question about the profile,
     // not about one route, so the ranking spans every group and is ordered by
     // decaying heat: the point is current habits, with the lifetime level
@@ -1482,6 +1821,7 @@ export function apply(ctx, rawConfig) {
     return {
       revision: await store.read('__global__').then(overlay => overlay.revision),
       selectorMode: config.selector.mode,
+      models,
       fallbackEnabled: config.fallback.enabled,
       usage: {
         enabled: config.usage.enabled,
@@ -1582,7 +1922,14 @@ export function apply(ctx, rawConfig) {
       ? defaults.currentSelection()
       : undefined
     try {
-      await controller.selectModel({ sessionId, provider: target.route, model: target.model })
+      await controller.selectModel({
+        sessionId,
+        provider: target.route,
+        model: target.model,
+        // A repair is a LEVEL change on the same model; omitting it here left the
+        // Session carrying the unsupported level while only the retry was fixed.
+        ...(target.reasoningEffort === undefined ? {} : { reasoningEffort: target.reasoningEffort }),
+      })
     } catch (error) {
       return { ok: false, why: error instanceof Error ? error.message : String(error) }
     }
@@ -1657,6 +2004,74 @@ export function apply(ctx, rawConfig) {
     return { ok: true, route: next.route, model: next.model, previous, reason: verdict.reason }
   }
 
+  /**
+   * Repair a reasoning level the selected model does not declare.
+   *
+   * The failure is a stale or misspelled SELECTION, not a sick model. Switching models
+   * would hide the configuration mistake, and recording it against the model would
+   * blacklist something that works. So the level is replaced by the one the model
+   * declares as its default (or its first level, or no level at all when it declares
+   * none), the Session is moved with it, and the same request is retried once.
+   *
+   * @param {object} payload - the `agent/request-error` payload.
+   * @returns {Promise<{ ok: true, to: string|null } | { ok: false, why: string }>} outcome.
+   */
+  async function healEffort(payload) {
+    const { agent, turn, provider } = payload
+    const model = lastRequest.get(agent.id)?.model
+    if (model === undefined) return { ok: false, why: 'the failing model could not be identified' }
+    const budgetKey = `${agent.id}/${turn}`
+    if (effortHealAttempts.has(budgetKey)) return { ok: false, why: 'the level was already repaired this turn' }
+    const registry = llm()
+    if (registry === undefined || typeof registry.resolveModelInfo !== 'function') {
+      return { ok: false, why: 'the model catalog is unreachable, so no valid level can be chosen' }
+    }
+    let info
+    try {
+      info = await registry.resolveModelInfo(provider, model)
+    } catch (error) {
+      return {
+        ok: false,
+        why: `the model's levels could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      }
+    }
+    const reasoning = info?.reasoning
+    const target = reasoning?.defaultEffort ?? reasoning?.efforts?.[0]?.id
+    effortHealAttempts.add(budgetKey)
+    // A model that declares nothing must be asked with NO level at all: repeating the
+    // unsupported one, or inventing an id, would fail the retry for the same reason.
+    pendingOverride.set(agent.id, {
+      route: provider,
+      model,
+      turn,
+      step: payload.step,
+      at: Date.now(),
+      reasoningEffort: target,
+      clearEffort: target === undefined,
+    })
+    const moved = await selectSessionModel(agent.id, { route: provider, model, reasoningEffort: target })
+    diagnostics.effortHeals.push({
+      at: Date.now(),
+      agent: agent.id,
+      turn,
+      model,
+      to: target ?? null,
+      sessionMoved: moved.ok === true,
+    })
+    if (moved.ok !== true) {
+      diagnostics.refusals.push({ at: Date.now(), why: `level repair did not move the session: ${moved.why}` })
+    }
+    try {
+      ctx.logger?.info?.(
+        'llm-manage: unsupported reasoning level on %s/%s — retrying at %s (session moved: %s)',
+        provider, model, target ?? 'the model default', moved.ok === true,
+      )
+    } catch {
+      // Logging is diagnostic only and must never break recovery.
+    }
+    return { ok: true, to: target ?? null }
+  }
+
   // ── Recovery: capture each request's model, then move it on quota failure ──
 
   ctx.inject(['llm', 'agents'], (scope) => {
@@ -1685,6 +2100,22 @@ export function apply(ctx, rawConfig) {
         if (config.usage.enabled) {
           addUsage(payload.provider, current.model, usageIncrement({ attempts: 1, at: Date.now() }))
         }
+      }
+      // A level repair is neither a model switch nor a health verdict: handle it
+      // first, so the fallback chain never runs for a configuration mistake.
+      if (verdict.reason === REASON.EFFORT) {
+        let repaired
+        try {
+          repaired = await healEffort(payload)
+        } catch (error) {
+          diagnostics.refusals.push({ at: Date.now(), why: error instanceof Error ? error.message : String(error) })
+          return next()
+        }
+        if (!repaired.ok) {
+          diagnostics.refusals.push({ at: Date.now(), why: repaired.why })
+          return next()
+        }
+        return { kind: 'retry' }
       }
       // Only a model-scoped, switchable failure is ours; everything else keeps
       // the stock behaviour, including the retry policy for real rate limits.
@@ -1717,13 +2148,20 @@ export function apply(ctx, rawConfig) {
       // so a retry that never happened cannot move some future turn's model.
       if (override.turn !== payload.turn || override.step !== payload.step) return decision
       if (Date.now() - override.at > OVERRIDE_TTL_MS) return decision
-      return { ...decision, provider: override.route, model: override.model }
+      const applied = { ...decision, provider: override.route, model: override.model }
+      // A level repair changes the effort on the SAME model, and a model that declares no
+      // levels must be asked with none — so clearing is a distinct instruction, not an
+      // absent value.
+      if (override.clearEffort === true) delete applied.reasoningEffort
+      else if (override.reasoningEffort !== undefined) applied.reasoningEffort = override.reasoningEffort
+      return applied
     })
 
     scope.on('agent/disposed', ({ agent }) => {
       lastRequest.delete(agent.id)
       pendingOverride.delete(agent.id)
       for (const key of fallbacksThisTurn.keys()) if (key.startsWith(`${agent.id}/`)) fallbacksThisTurn.delete(key)
+      for (const key of effortHealAttempts) if (key.startsWith(`${agent.id}/`)) effortHealAttempts.delete(key)
     })
   })
 
@@ -1950,6 +2388,21 @@ export function apply(ctx, rawConfig) {
           switch (action) {
             case 'snapshot':
               return json({ ok: true, value: await snapshot({ forceDirectory: body?.forceDirectory === true }) })
+            // Cheap on purpose. The client half needs `selector.mode` before it can
+            // decide whether to occupy the model seat, and the client runtime does not
+            // hand plugins their Loader row config (`__DSH_BOOT__` entries are
+            // { id, url, rev } only), so it asks here. Reading a whole snapshot for
+            // one enum would list every model on every page load.
+            case 'selectorMode':
+              return json({ ok: true, value: { selectorMode: config.selector.mode } })
+              // Turn the probe's answer into a declaration, so a level the gateway accepts
+              // becomes one this model can actually be switched to.
+              case 'declareLevels': {
+                if (route === undefined || model === undefined) return json({ ok: false, message: 'declareLevels needs a route and a model' }, 400)
+                const declared = await declareLevels(route, model)
+                if (!declared.ok) return json({ ok: false, message: declared.why }, 400)
+                return json({ ok: true, value: { route, model, levels: declared.levels } })
+              }
             case 'sync': {
               if (route === undefined) return json({ ok: false, message: 'sync needs a route' }, 400)
               const directory = await gatewayDirectory(route, { force: true })
@@ -1959,7 +2412,30 @@ export function apply(ctx, rawConfig) {
               if (route === undefined || model === undefined) return json({ ok: false, message: 'probe needs a route and a model' }, 400)
               const verdict = await probeModel(route, model)
               await recordHealth(route, model, verdict, 'probe')
-              return json({ ok: true, value: { route, model, ...verdict }, snapshot: await snapshot() })
+              // Only an explicit single-model probe sweeps levels: a batch would
+              // multiply the sweep's cost by the number of candidates, which is exactly
+              // the quiet spend this plugin exists to make visible.
+              const levels = await probeLevels(route, model)
+              if (levels !== undefined) {
+                await store.update(route, overlay => ({
+                  ...overlay,
+                  levels: { ...(overlay.levels ?? {}), [model]: levels },
+                }))
+              }
+              // The probe is the moment the user paid for the answer, so the declaration is
+              // written here instead of waiting for a second click: a level the gateway accepts
+              // becomes switchable without the user learning the two-fact split the hard way.
+              // A route the settings service cannot reach simply ships no declaration — the
+              // probe's own verdict still returns, and the detail keeps its manual button.
+              let declared = undefined
+              if (Array.isArray(levels?.accepted) && levels.accepted.length > 0) {
+                const result = await declareLevels(route, model)
+                if (result.ok) declared = { levels: result.levels }
+                else if (typeof result.why === 'string' && !/no measured levels/.test(result.why)) {
+                  ctx.logger?.warn?.('llm-manage: auto-declare refused for %s/%s: %s', route, model, result.why)
+                }
+              }
+              return json({ ok: true, value: { route, model, ...verdict, levels, declared }, snapshot: await snapshot() })
             }
             case 'toggle': {
               if (route === undefined || model === undefined) return json({ ok: false, message: 'toggle needs a route and a model' }, 400)
@@ -2022,6 +2498,9 @@ export function apply(ctx, rawConfig) {
                 // Whether this session still allows automatic switching, so the
                 // banner can offer the toggle that matches its current state.
                 autoSwitch: sessionId === undefined ? true : !noAutoSwitch.has(sessionId),
+                // Level repairs are reported through the same channel as switches: the user
+                // must learn that their level was replaced, not discover it in a silent retry.
+                effortHeals: diagnostics.effortHeals.filter(entry => entry.agent === sessionId).slice(-5),
               })
             }
             // Undo. The switch now moves the Session's own model, so undoing it

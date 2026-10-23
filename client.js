@@ -157,6 +157,22 @@ window.__ModuleLoader__.load({
         detailOriginLive: 'as it happened',
         detailAlsoOn: 'Also on',
         pickerTitle: 'Model',
+        routeSection: 'Routes',
+        detailLevels: 'Gateway levels',
+        detailLevelsNone: 'none accepted',
+        detailLevelsUnprobed: 'not probed',
+        detailLevelsRefused: 'declared but refused',
+        detailGroupHealth: 'Availability',
+        detailGroupLevels: 'Reasoning level',
+        detailGroupUsage: 'Usage',
+        declareLevels: 'Use measured levels',
+        effortName: 'Reasoning',
+        effortDefault: 'Default',
+        effortDefaultFull: 'Default (upstream)',
+        effortSingle: 'this model offers one level only',
+        effortUpstreamNote: 'DSH sends no level, so the upstream decides',
+        effortMeasuredHint: 'Measured at the gateway, not declared yet',
+        effortDeclareNow: 'Declare these levels',
         search: 'Search models',
         noModels: 'No models matched.',
         unavailable: 'unavailable',
@@ -267,6 +283,22 @@ window.__ModuleLoader__.load({
         detailOriginLive: '实时记录',
         detailAlsoOn: '同名模型',
         pickerTitle: '模型',
+        routeSection: '路由',
+        detailLevels: '网关实测等级',
+        detailLevelsNone: '全部不接受',
+        detailLevelsUnprobed: '未探测',
+        detailLevelsRefused: '已声明但被拒绝',
+        detailGroupHealth: '可用性',
+        detailGroupLevels: '推理档位',
+        detailGroupUsage: '用量',
+        declareLevels: '启用实测档位',
+        effortName: '思考强度',
+        effortDefault: '默认',
+        effortDefaultFull: '默认（上游）',
+        effortSingle: '该模型只有一档',
+        effortUpstreamNote: 'DSH 不发送该参数，实际等级由上游决定',
+        effortMeasuredHint: '网关实测支持这些档位，但还没写进配置',
+        effortDeclareNow: '写进配置',
         search: '搜索模型',
         noModels: '没有匹配的模型。',
         unavailable: '不可用',
@@ -453,40 +485,88 @@ window.__ModuleLoader__.load({
      */
     function ModelDetail(props) {
       const row = props.row
+      // A level sweep answers two questions at once: which levels this gateway accepts
+      // at all, and whether a level DECLARED in the route config is one of them. The
+      // second turns a silent runtime rejection into a visible configuration mistake.
+      const levels = row.levels === null || row.levels === undefined ? undefined : row.levels
+      const declared = Array.isArray(props.declared) ? props.declared : undefined
+      const refusedDeclared = levels === undefined || declared === undefined
+        ? []
+        : declared.filter(level => (levels.rejected ?? []).some(entry => entry.level === level))
       const usage = row.usage === null || row.usage === undefined || row.usage.uses <= 0 ? null : row.usage
-      /** One labelled field; absent values render nothing. */
-      const field = (label, value) => (value === null || value === undefined || value === '')
-        ? null
-        : h('div', { className: 'llmm-field' },
-          h('span', { className: 'llmm-field-label' }, label),
-          h('span', { className: 'llmm-field-value' }, value))
-      return h('div', { className: 'llmm-detail' },
-        field(t('detailStatus'), statusLabel(row.status)),
-        field(t('detailReason'), row.reason),
-        field(t('detailSource'), sourceLabel(row.source)),
-        field(t('detailChecked'), row.at > 0 ? ageOf(row.at) : null),
-        field(t('detailDirectory'), row.inDirectory === true ? t('detailListed') : t('detailMissing')),
-        usage !== null
-          ? field(t('detailLevel'), `${t('levelShort')}.${usage.level}`
-            + (usage.nextAt > 0 ? ` · ${t('detailNextLevel')} ${usage.nextAt}` : ''))
+      const tone = statusTone(row.status)
+      // One line answers "can I use it, and how do I know": the tone dot, the state,
+      // what was checked, how long ago, and whether the gateway still lists it. The
+      // record used to spend five rows on these, which read as a settings form rather
+      // than as a description of one model.
+      const summaryParts = [statusLabel(row.status)]
+      if (typeof row.reason === 'string' && row.reason !== '' && row.reason.length <= 48) {
+        summaryParts.push(row.reason)
+      }
+      summaryParts.push(sourceLabel(row.source))
+      if (row.at > 0) summaryParts.push(ageOf(row.at))
+      summaryParts.push(row.inDirectory === true ? t('detailListed') : t('detailMissing'))
+      // Only a long reason earns its own line, and only when it is clamped: an error
+      // body is the one value here that can be a paragraph.
+      const longReason = typeof row.reason === 'string' && row.reason.length > 48 ? row.reason : undefined
+      const compactCount = (value) => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return String(value ?? 0)
+        if (value >= 1e6) return `${(value / 1e6).toFixed(1)}M`
+        if (value >= 1e3) return `${(value / 1e3).toFixed(1)}K`
+        return String(value)
+      }
+      const usageStats = []
+      if (usage !== null) {
+        usageStats.push(`${usage.uses} ${t('usesLabel')}`)
+        if (usage.recent7 > 0) usageStats.push(`${t('detailRecent7')} ${usage.recent7}`)
+        if (usage.prior7 > 0) usageStats.push(`${t('detailPrior7')} ${usage.prior7}`)
+        if (typeof usage.heat === 'number') usageStats.push(`${t('detailHeat')} ${usage.heat.toFixed(1)}`)
+        if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+          usageStats.push(`${compactCount(usage.inputTokens)}/${compactCount(usage.outputTokens)} ${t('tokensLabel')}`)
+        }
+        if (usage.firstAt > 0) usageStats.push(`${t('detailFirstUsed')} ${ageOf(usage.firstAt)}`)
+      }
+      const levelsText = levels === undefined
+        ? t('detailLevelsUnprobed')
+        : (levels.accepted ?? []).length === 0
+          ? t('detailLevelsNone')
+          : (levels.accepted ?? []).join(' · ')
+      const declareAction = typeof props.onDeclare === 'function'
+        ? h('button', { type: 'button', className: 'llmm-inline-act', onClick: props.onDeclare }, t('declareLevels'))
+        : null
+      const line = (label, value, extra) => h('div', { className: 'llmm-detail-line' },
+        h('span', { className: 'llmm-detail-line-label' }, label),
+        h('span', { className: 'llmm-detail-line-value' }, value, extra ?? null))
+      const actions = Array.isArray(props.actions) ? props.actions.filter(Boolean) : []
+      return h('div', { className: `llmm-detail${props.pick === true ? ' llmm-detail-pick' : ''}` },
+        h('div', { className: 'llmm-detail-summary' },
+          h('span', { className: `llmm-dot ${tone}` }),
+          h('span', { className: 'llmm-detail-summary-text' }, summaryParts.join(' · ')),
+          actions.length === 0
+            ? null
+            : h('div', { className: 'llmm-detail-acts' }, actions)),
+        longReason === undefined
+          ? null
+          : h('div', { className: 'llmm-detail-reason', title: longReason }, longReason),
+        line(t('detailGroupLevels'), levelsText, declareAction),
+        refusedDeclared.length === 0
+          ? null
+          : h('div', { className: 'llmm-detail-line llmm-detail-line-warn' },
+            h('span', { className: 'llmm-detail-line-label' }, t('detailLevelsRefused')),
+            h('span', { className: 'llmm-detail-line-value' }, refusedDeclared.join(' · '))),
+        usage === null
+          ? null
+          : h('div', { className: 'llmm-detail-line' },
+            h('span', { className: 'llmm-detail-line-label' }, t('detailGroupUsage')),
+            h('div', { className: 'llmm-usage' },
+              h('span', { className: 'llmm-usage-level' }, `${t('levelShort')}.${usage.level}`),
+              h('div', { className: 'llmm-bar llmm-bar-field' },
+                h('div', { className: 'llmm-bar-fill', style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` } })),
+              h('span', { className: 'llmm-usage-stats', title: usageStats.join(' · ') }, usageStats.join(' · ')))),
+        row.alsoOn && row.alsoOn.length > 0
+          ? line(t('detailAlsoOn'), row.alsoOn.join(', '))
           : null,
-        // A bar rather than a percentage: the question is "how far to the next
-        // level", which is a distance, not a score.
-        usage !== null
-          ? h('div', { className: 'llmm-field' },
-            h('span', { className: 'llmm-field-label' }, t('detailProgress')),
-            h('div', { className: 'llmm-bar llmm-bar-field' },
-              h('div', { className: 'llmm-bar-fill', style: { width: `${Math.round((usage.progress ?? 0) * 100)}%` } })))
-          : null,
-        usage !== null ? field(t('detailUses'), String(usage.uses)) : null,
-        usage !== null ? field(t('detailRecent7'), String(usage.recent7)) : null,
-        usage !== null ? field(t('detailPrior7'), String(usage.prior7)) : null,
-        usage !== null && typeof usage.heat === 'number' ? field(t('detailHeat'), usage.heat.toFixed(1)) : null,
-        usage !== null && usage.firstAt > 0 ? field(t('detailFirstUsed'), ageOf(usage.firstAt)) : null,
-        usage !== null && usage.lastAt > 0 ? field(t('detailLastUsed'), ageOf(usage.lastAt)) : null,
-        usage !== null ? field(t('detailTokens'), `${usage.inputTokens} / ${usage.outputTokens}`) : null,
-        usage !== null ? field(t('detailOrigin'), usage.seeded ? t('detailOriginSeeded') : t('detailOriginLive')) : null,
-        row.alsoOn && row.alsoOn.length > 0 ? field(t('detailAlsoOn'), row.alsoOn.join(', ')) : null,
+          props.extra ?? null,
       )
     }
 
@@ -504,6 +584,29 @@ window.__ModuleLoader__.load({
 .llmm-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .llmm-counts{display:flex;gap:10px;flex-wrap:wrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
 .llmm-count b{font-weight:500;color:var(--dsw-alias-label-secondary)}
+/* The detail is a PROFILE, not a form: one line says whether the model is usable
+   and how that was established, one line carries the reasoning level, one line the
+   usage. Fifteen label/value rows read as a settings page and buried the answer. */
+.llmm-detail{display:flex;flex-direction:column;gap:5px;margin:0 0 6px;padding:2px 0 2px}
+.llmm-detail-pick{padding-left:22px;margin:0 0 8px}
+.llmm-detail-summary{display:flex;align-items:center;gap:6px;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-secondary)}
+.llmm-detail-acts{flex:none;display:flex;align-items:center;gap:2px;margin-left:auto}
+.llmm-detail-summary-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-detail-reason{padding-left:14px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.llmm-detail-line{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:12px;line-height:18px}
+.llmm-detail-line-label{flex:none;width:52px;color:var(--dsw-alias-label-tertiary)}
+.llmm-detail-line-value{flex:1;min-width:0;color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums;word-break:break-word}
+.llmm-detail-line-warn .llmm-detail-line-value{color:var(--dsw-alias-state-warn-primary)}
+.llmm-usage{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.llmm-usage-level{flex:none;color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
+.llmm-usage-stats{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+/* Actions are ghost TEXT, not bordered pills: at this weight they used to read as
+   the primary content of the row. Same grammar as the panel's icon actions. */
+/* A progress bar is a hint, not a headline: 3px, and the fill stays neutral so it
+   cannot out-shout the values beside it. */
+.llmm-bar{height:3px;border-radius:2px;background:var(--dsw-alias-bg-layer-2,var(--dsw-alias-border-l3));overflow:hidden}
+.llmm-bar-fill{height:100%;border-radius:2px;background:var(--dsw-alias-label-tertiary);transition:width .2s ease}
+.llmm-bar-field{flex:1;min-width:56px;max-width:110px;align-self:center}
 .llmm-actions{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
 /* The settings page's compact button: 28px tall, radius-sm, 12/18, and a 0.5px
    border so an outlined control is not 2px taller than the filled one beside it. */
@@ -565,11 +668,6 @@ window.__ModuleLoader__.load({
 .llmm-why-line{order:1;flex:0 0 100%;padding-left:34px;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 /* The expanded detail block. Fields are label/value pairs on one line each, so a
    long reason wraps under its own label instead of pushing the value off-screen. */
-.llmm-detail{margin:0 0 4px 34px;padding:6px 8px;border-left:2px solid var(--dsw-alias-border-l3);border-radius:0 var(--dsw-radius-sm) var(--dsw-radius-sm) 0;background:var(--dsw-alias-bg-layer-1,transparent);display:flex;flex-direction:column;gap:3px}
-.llmm-field{display:flex;align-items:baseline;gap:8px;font-size:12px;line-height:18px}
-.llmm-field-label{flex:none;width:112px;color:var(--dsw-alias-label-tertiary)}
-.llmm-field-value{flex:1;min-width:0;color:var(--dsw-alias-label-secondary);word-break:break-word}
-.llmm-bar-field{flex:1;min-width:60px;align-self:center}
 .llmm-rowacts{display:flex;gap:2px;margin-left:auto;opacity:.6;transition:opacity .12s ease}
 /* Quiet at rest, full on hover or keyboard focus. They stay visible rather than
    appearing on hover: pin/favorite are the point of the panel, and a control you can
@@ -619,6 +717,25 @@ window.__ModuleLoader__.load({
 .llmm-trigger:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}
 .llmm-trigger.llmm-locked{opacity:.55;cursor:default}
 .llmm-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-effort{flex:none;max-width:140px;padding-left:2px}
+.llmm-effort-static{cursor:default}
+.llmm-effort-static .llmm-trigger-label{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary))}
+.llmm-effort-sep{flex:none;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary))}
+.llmm-effort-menu{position:fixed;z-index:1100;display:flex;flex-direction:column;padding:4px;border-radius:var(--dsw-radius-lg);box-shadow:var(--dsw-elevation-prominent,0 0 0 .5px var(--dsw-alias-border-l1),0 3px 8px rgba(0,0,0,.04));color:var(--dsw-alias-label-primary);font-size:13px}
+.llmm-effort-item{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:inherit;font:inherit;font-size:13px;line-height:18px;text-align:left;cursor:pointer}
+.llmm-effort-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-effort-item:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}
+.llmm-routes{display:flex;flex-direction:column;gap:1px;padding:2px 4px 6px}
+.llmm-routes-label{padding:2px 6px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px;font-weight:500}
+.llmm-route-choice{display:flex;align-items:center;gap:6px;width:100%;padding:4px 6px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:inherit;font:inherit;font-size:12px;line-height:16px;text-align:left;cursor:pointer}
+.llmm-route-choice:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-route-choice:focus-visible{outline:none;box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}
+.llmm-route-on{color:var(--dsw-alias-label-primary);font-weight:600}
+.llmm-route-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-effort-on{font-weight:600}
+.llmm-effort-mark{flex:none;width:12px}
+.llmm-effort-note{padding:2px 8px 6px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:12px;line-height:16px}
+.llmm-chip-effort{margin-left:2px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .llmm-menu-body{flex:auto;min-height:0;overflow-y:auto;overflow-x:hidden}
 /* Section headings take the Menu primitive's heading metrics (MenuGroup.module.css):
    11/16 at weight 500 in tertiary. One deliberate difference: DSH toggles a fill on
@@ -658,8 +775,6 @@ window.__ModuleLoader__.load({
 .llmm-hero-top{display:flex;align-items:center;gap:4px}
 .llmm-hero-name{font-family:var(--ds-font-family-code);font-size:12px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .llmm-hero-meta{font-size:11px;line-height:14px;color:var(--dsw-alias-label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.llmm-bar{height:4px;border-radius:2px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-border-l3));overflow:hidden}
-.llmm-bar-fill{height:100%;border-radius:2px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-label-secondary));transition:width .2s ease}
 /* Sort control: a segmented row of text buttons, matching the panel's own chips. */
 .llmm-sort{display:flex;align-items:center;gap:4px;font-size:11px;line-height:16px}
 .llmm-sort-label{color:var(--dsw-alias-label-tertiary)}
@@ -682,14 +797,9 @@ window.__ModuleLoader__.load({
 .llmm-item-select:focus-visible{outline:none}
 /* The action block. The chevron is one glyph; these carry labels, because four
    icon-only actions in a 240px menu is a guessing game. */
-.llmm-acts{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
-.llmm-act{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}
-.llmm-act:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.llmm-act:disabled{opacity:.55;cursor:default}
-.llmm-act-on{border-color:var(--dsw-alias-brand-primary,var(--dsw-alias-border-l3));color:var(--dsw-alias-brand-primary,var(--dsw-alias-label-primary))}
-.llmm-act-danger{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
 /* The block belongs to the row above it, so it is indented to the name. */
-.llmm-detail-pick{margin:0 0 4px 26px}
+.llmm-inline-act{margin-left:8px;padding:0;border:0;background:transparent;color:var(--dsw-alias-state-business-primary);font:inherit;font-size:12px;line-height:18px;text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.llmm-inline-act:hover{background:transparent;color:var(--dsw-alias-state-business-primary)}
 .llmm-item:hover{background:var(--dsw-alias-interactive-bg-hover)}
 /* Keyboard focus is the same fill the pointer gets: the fill IS the row's focus
    indication, and a default ring on top of it would double the signal. */
@@ -870,7 +980,7 @@ window.__ModuleLoader__.load({
       // first screen is the part that needs a decision. The usage orderings are
       // opt-in so the default view stays the one the panel was designed around.
       /** Stable identity for one row, used to freeze and restore an order. */
-      const rowKey = (row) => `${row.route}/${row.model}`
+      const rowKey = (row) => row.route + '/' + row.model
 
       const ordered = useMemo(() => rows.slice().sort((left, right) => {
         const usageOf = (row) => (row.usage === null || row.usage === undefined ? null : row.usage)
@@ -1291,6 +1401,28 @@ window.__ModuleLoader__.load({
       // flight, so a click answers immediately and cannot be double-fired.
       const [detailKeys, setDetailKeys] = useState(() => new Set())
       const [pending, setPending] = useState('')
+      // The level menu is a separate surface from the model list on purpose: it is
+      // reached without opening the list, which is the whole point of putting it on
+      // the trigger. Two open surfaces would fight over the same dismiss handler.
+      const [levelOpen, setLevelOpen] = useState(false)
+      const [levelPos, setLevelPos] = useState(null)
+      const levelRef = useRef(null)
+      const levelMenuRef = useRef(null)
+      // A tooltip channel of this component's own. The panel has one, but each is
+      // scoped to its own subtree, and the actions need the label the icon cannot
+      // spell — the same reason the panel's icon buttons carry one.
+      const [tip, setTip] = useState(null)
+      const tipChannel = useMemo(() => ({
+        show: (text, node) => {
+          if (!node || typeof node.getBoundingClientRect !== 'function') return
+          const rect = node.getBoundingClientRect()
+          const half = Math.max(40, text.length * 5.5)
+          const width = typeof window === 'undefined' ? 0 : window.innerWidth
+          const x = Math.min(Math.max(rect.left + rect.width / 2, half), Math.max(half, width - half))
+          setTip({ text, x, y: rect.top - 6 })
+        },
+        hide: () => setTip(null),
+      }), [])
       // Section membership as it was when this menu opened, captured at the first
       // pin or favorite. Pinning otherwise lifts a row out of its route group into
       // a section at the top — a bigger jump than the panel's, and the one thing
@@ -1350,10 +1482,23 @@ window.__ModuleLoader__.load({
       }, [open, place])
 
       const current = state ? state.current : null
+
+      // A row's identity is the MODEL when the Host supplies the model-first view,
+      // and route/model when it does not. Every membership set in this component
+      // (pins, favorites, frequent, frozen flags, detail expansion) keys off this, so
+      // an un-restarted Host keeps working instead of silently losing state.
+      const rowKey = (row) => (row.key !== undefined ? row.key : row.route + '/' + row.model)
       const overlay = useMemo(() => {
         const map = new Map()
         if (snap === null) return map
-        for (const group of snap.groups) for (const row of group.rows) map.set(`${row.route}/${row.model}`, row)
+        for (const group of snap.groups) {
+          for (const row of group.rows) {
+            map.set(rowKey(row), row)
+            // A model-first row is keyed by model id; keeping that spelling too means the
+            // two key schemes cannot silently disagree about a row again.
+            if (!map.has(row.model)) map.set(row.model, row)
+          }
+        }
         return map
       }, [snap])
 
@@ -1368,7 +1513,76 @@ window.__ModuleLoader__.load({
       // by route name, so with several routes a favorite can sit below every
       // model of every alphabetically-earlier route — which is the scrolling the
       // sections exist to remove.
+
+      /**
+       * Build the model-first catalogue from the shipped directory alone.
+       *
+       * Used only when the Host cannot answer. Two routes serving one model id become
+       * one row, same as the Host's own view, so the degraded path is not the one place
+       * where a wrapped route lists the same model twice.
+       *
+       * @param {object|null} catalog - the shipped directory snapshot.
+       * @returns {object[]} groups keyed by the model's first route, in catalog order.
+       */
+      const modelFirstFromCatalog = (catalog) => {
+        const groups = catalog && Array.isArray(catalog.groups) ? catalog.groups : []
+        const families = new Map()
+        const seen = new Map()
+        for (const group of groups) {
+          for (const model of Array.isArray(group.models) ? group.models : []) {
+            const known = seen.get(model.id)
+            if (known !== undefined) {
+              known.alsoOn.push(group.name || group.id)
+              continue
+            }
+            const family = families.get(group.id) ?? { route: group.id, name: group.name, rows: [] }
+            const row = {
+              key: model.id, route: group.id, model: model.id, routes: [],
+              alsoOn: [], pinned: false, favorite: false, hidden: false,
+              status: 'unknown', usage: null,
+            }
+            families.set(group.id, family)
+            family.rows.push(row)
+            seen.set(model.id, row)
+          }
+        }
+        return [...families.values()]
+      }
+
       const catalogue = useMemo(() => {
+        // The Host now reports one entry per MODEL with its routes as attributes, so
+        // render what the user is choosing rather than what DSH uses to reach it. Two
+        // routes serving one model id collapse here without this half knowing why they
+        // exist: a vision twin today, an alias or a future wrapper tomorrow.
+        //
+        // Grouping still needs a provider label. The FAMILY is the model's first route
+        // in the Host's own order (routes arrive sorted), which is stable across
+        // refreshes and needs no naming rule; the route a click selects is `primary`,
+        // which follows usage. They can differ, and the row's `also on` chip says so.
+        if (snap !== null && Array.isArray(snap.models) && snap.models.length > 0) {
+          const families = new Map()
+          for (const entry of snap.models) {
+            const routes = Array.isArray(entry.routes) ? entry.routes : []
+            if (routes.length === 0) continue
+            // The family is the route the model is actually used through, not the first
+            // alphabetically: `deepseek-flash` is served by `deepseek-account` and
+            // `deepseek-official`, and alphabetical order filed it under the former while
+            // every call went through the latter — a heading that contradicted the row.
+            const family = routes.find(route => route.route === entry.primary) ?? routes[0]
+            const group = families.get(family.route) ?? { route: family.route, name: family.name, rows: [] }
+            group.rows.push({
+              ...entry,
+              key: entry.model,
+              route: entry.primary,
+              alsoOn: routes
+                .filter(route => route.route !== entry.primary)
+                .map(route => route.name || route.route),
+              usage: entry.usage ?? null,
+            })
+            families.set(family.route, group)
+          }
+          return [...families.values()]
+        }
         const live = snap !== null
           ? snap.groups.map(group => ({
             route: group.route,
@@ -1392,16 +1606,45 @@ window.__ModuleLoader__.load({
           }))
           // The shipped directory carries no overlay, so nothing can be lifted:
           // without the Host there is no way to know what is pinned or favorited.
-          : (state && Array.isArray(state.groups) ? state.groups : []).map(group => ({
-            route: group.id,
-            name: group.name,
-            rows: group.models.map(model => ({
-              route: group.id, model: model.id, pinned: false, favorite: false,
-              hidden: false, status: 'unknown', usage: null,
-            })),
-          }))
+          //
+          // It is still grouped model-first, because the degraded path must not be the
+          // one place where a model served by two routes appears twice — two routes are
+          // exactly how a wrapper route (a vision twin) shows up, and that is likelier
+          // than usual when the Host is unreachable.
+          : modelFirstFromCatalog(state)
         return live
       }, [snap, state])
+
+      // The catalog the shipped directory already carries has `reasoning` on every
+      // model, and it is the ONLY place this half can see it: the Host snapshot
+      // describes health and usage, not capability. Indexing it once per catalog
+      // generation keeps the row render and the trigger from searching 75 entries
+      // per keystroke.
+      const reasoningIndex = useMemo(() => {
+        const index = new Map()
+        if (state && Array.isArray(state.groups)) {
+          for (const group of state.groups) {
+            const models = Array.isArray(group.models) ? group.models : []
+            for (const entry of models) {
+              if (entry && entry.id !== undefined && entry.reasoning !== undefined) {
+                index.set(`${group.id}/${entry.id}`, entry.reasoning)
+              }
+            }
+          }
+        }
+        return index
+      }, [state])
+
+      /** What this model lets the user pick, if anything. */
+      const reasoningOf = useCallback(
+        (route, model) => reasoningIndex.get(`${route}/${model}`),
+        [reasoningIndex],
+      )
+
+      const levelName = (reasoning, id) => {
+        const found = reasoning === undefined ? undefined : reasoning.efforts.find(level => level.id === id)
+        return found === undefined || found.name === '' ? id : found.name
+      }
 
       /**
        * Split the catalogue into the sections the menu renders.
@@ -1426,7 +1669,7 @@ window.__ModuleLoader__.load({
         // click did nothing.
         const flagsOf = (row) => (frozenFlags === null
           ? { pinned: row.pinned, favorite: row.favorite }
-          : frozenFlags.get(`${row.route}/${row.model}`) ?? { pinned: row.pinned, favorite: row.favorite })
+          : frozenFlags.get(rowKey(row)) ?? { pinned: row.pinned, favorite: row.favorite })
         for (const group of catalogue) {
           // Hidden models leave the menu — that is what hiding means — but they
           // are collected rather than dropped, so the menu can offer them back.
@@ -1439,7 +1682,7 @@ window.__ModuleLoader__.load({
           }
           for (const row of group.rows) if (row.hidden && matches(row)) hidden.push(row)
         }
-        const lifted = new Set([...pinned, ...favorites].map(row => `${row.route}/${row.model}`))
+        const lifted = new Set([...pinned, ...favorites].map(row => rowKey(row)))
         // Frequently used models, most-used first, so a model the user works with
         // every day rises into view without being pinned by hand. It never
         // duplicates a pin or a favorite, and it is capped: this is a shortcut to
@@ -1452,7 +1695,7 @@ window.__ModuleLoader__.load({
             // it from the unfiltered catalogue made 「常用」 ignore the query and
             // leak rows into a search that should not have matched them.
             if (!matches(row)) continue
-            const key = `${row.route}/${row.model}`
+            const key = rowKey(row)
             if (lifted.has(key) || row.usage === null || row.usage.uses <= 0) continue
             if (frequentSeen.has(key)) continue
             frequentSeen.add(key)
@@ -1463,11 +1706,11 @@ window.__ModuleLoader__.load({
           || right.usage.uses - left.usage.uses
           || left.model.localeCompare(right.model))
         const frequentTop = frequent.slice(0, FREQUENT_LIMIT)
-        for (const row of frequentTop) lifted.add(`${row.route}/${row.model}`)
+        for (const row of frequentTop) lifted.add(rowKey(row))
         const groups = catalogue
           .map(group => ({
             ...group,
-            rows: (byRoute.get(group.route) ?? []).filter(row => !lifted.has(`${group.route}/${row.model}`)),
+            rows: (byRoute.get(group.route) ?? []).filter(row => !lifted.has(rowKey(row))),
           }))
           .filter(group => group.rows.length > 0)
         return { pinned, favorites, frequent: frequentTop, groups, hidden }
@@ -1483,7 +1726,10 @@ window.__ModuleLoader__.load({
        * @param {object[]} rows - the section's rows.
        * @returns {boolean} true when the rows span more than one route.
        */
-      const spansRoutes = (rows) => new Set(rows.map(row => row.route)).size > 1
+      // The route chip says "this row is reachable another way", so it is about the
+      // row, not about the section: under model-first nearly every section mixes
+      // several routes and would have stamped the chip on every single row.
+      const spansRoutes = (rows) => rows.some(row => (row.alsoOn ?? []).length > 0)
 
       /**
        * Order one section's rows by the active sort.
@@ -1526,7 +1772,7 @@ window.__ModuleLoader__.load({
           const flags = new Map()
           for (const group of catalogue) {
             for (const row of group.rows) {
-              flags.set(`${row.route}/${row.model}`, { pinned: row.pinned, favorite: row.favorite })
+              flags.set(rowKey(row), { pinned: row.pinned, favorite: row.favorite })
             }
           }
           return flags
@@ -1546,12 +1792,19 @@ window.__ModuleLoader__.load({
        * @returns {Promise<void>} fulfillment once the UI updated.
        */
       const mutate = useCallback(async (row, list, on) => {
-        const key = `${list}:${row.route}/${row.model}`
+        const key = `${list}:${rowKey(row)}`
         if (list !== 'hidden') freezeSections()
         setPending(key)
+        // A model reads as pinned when ANY of its routes is pinned, so turning the
+        // flag off has to clear every route. Clearing only the primary would leave the
+        // row reporting exactly the state the click removed.
+        const targets = on || !Array.isArray(row.routes) ? [row.route] : row.routes.map(entry => entry.route)
         try {
-          const data = await callHost({ action: 'toggle', route: row.route, model: row.model, list, on })
-          if (data.snapshot !== undefined) setSnap(data.snapshot)
+          let data
+          for (const route of targets) {
+            data = await callHost({ action: 'toggle', route, model: row.model, list, on })
+          }
+          if (data !== undefined && data.snapshot !== undefined) setSnap(data.snapshot)
         } catch { /* leave the menu usable; the row keeps the state it had */ } finally {
           setPending('')
         }
@@ -1572,18 +1825,39 @@ window.__ModuleLoader__.load({
         try {
           const data = await callHost({ action: 'probe', route: row.route, model: row.model })
           if (data.snapshot !== undefined) setSnap(data.snapshot)
+          // The probe now declares what it measured, and a declaration changes the
+          // catalog — the model's reasoning metadata, which the snapshot does not
+          // carry (the row's `reasoning` comes from the directory). Reload it so the
+          // level segment turns switchable in the same gesture, not on next mount.
+          if (data.value?.declared !== undefined) await load()
         } catch { /* leave the menu usable */ } finally {
           setPending('')
         }
-      }, [])
+      }, [load])
 
       const choose = useCallback(async (row) => {
         setFailure('')
-        const reuseEffort = current !== null && current.provider === row.route && current.model === row.model
-          ? (state && state.retainedEffort !== undefined ? state.retainedEffort : undefined)
+        // Picking the model you are already on must not silently move you off a route
+        // you chose deliberately (the vision twin, say): when the current provider is
+        // one of this model's routes, keep it.
+        const provider = Array.isArray(row.routes) && current !== null && current.model === row.model
+          && row.routes.some(entry => entry.route === current.provider)
+          ? current.provider
+          : row.route
+        // `retainedEffort` is the level NAME ("High"), not its id ("high"): the shipped
+        // directory spells it for display. Passing it straight through made the adapter
+        // reject the selection with `does not support reasoning effort "High"`, so the
+        // name is mapped back through this model's own declaration and dropped when it
+        // cannot be resolved — an unknown level must never be sent as if it were valid.
+        const retainedEffort = current !== null && current.provider === provider && current.model === row.model
+          && state !== null && state !== undefined && state.retainedEffort !== undefined
+          ? (reasoningOf(provider, row.model)?.efforts ?? []).find(
+            level => level.name === state.retainedEffort || level.id === state.retainedEffort,
+          )?.id
           : undefined
+        const reuseEffort = retainedEffort
         const result = await select({
-          provider: row.route,
+          provider,
           model: row.model,
           ...(reuseEffort === undefined ? {} : { reasoningEffort: reuseEffort }),
         })
@@ -1594,9 +1868,168 @@ window.__ModuleLoader__.load({
           setFailure(error && error.message ? error.message : JSON.stringify(error))
           return
         }
-        callHost({ action: 'use', route: row.route, model: row.model }).catch(() => {})
+        callHost({ action: 'use', route: provider, model: row.model }).catch(() => {})
         setOpen(false)
       }, [select, current, state])
+
+      // Switching which route serves the SAME model. The current level is carried over
+      // only when that route declares it: levels are a per-model capability, and a
+      // wrapper route may advertise a different set — carrying an unsupported one would
+      // fail the selection instead of falling back to the route's own default.
+      const chooseRoute = useCallback(async (row, route) => {
+        setFailure('')
+        const carried = current !== null && current.model === row.model ? current.reasoningEffort : undefined
+        const reasoning = reasoningOf(route, row.model)
+        const supported = carried !== undefined && reasoning !== undefined
+          && reasoning.efforts.some(level => level.id === carried)
+        const result = await select({
+          provider: route,
+          model: row.model,
+          ...(supported ? { reasoningEffort: carried } : {}),
+        })
+        if (result && result.ok === false) {
+          const error = result.error
+          setFailure(error && error.message ? error.message : JSON.stringify(error))
+        }
+      }, [select, current, reasoningOf])
+
+      // Measurement unlocks nothing on its own: the harness validates a level against
+      // the model's DECLARATION, so a level the gateway accepts but the config omits is
+      // offered by nobody. This writes the probe's answer through the Host, which uses
+      // the same settings path the settings UI does, then re-reads both sources so the
+      // trigger becomes adjustable without a page reload.
+      const declare = useCallback(async (row) => {
+        setFailure('')
+        try {
+          await callHost({ action: 'declareLevels', route: row.route, model: row.model })
+        } catch (error) {
+          setFailure(error instanceof Error ? error.message : String(error))
+          return
+        }
+        load()
+        callHost({ action: 'snapshot' })
+          .then((data) => { if (data !== null && data.value !== undefined) setSnap(data.value) })
+          .catch(() => { /* the declaration itself succeeded; a stale list is recoverable */ })
+      }, [load])
+
+      /**
+       * The levels the probe measured for one model, if any.
+       *
+       * Measurement and declaration are different facts, and the picker needs both: a
+       * model whose gateway was measured but whose config declares nothing cannot be
+       * switched, and pretending otherwise would offer choices that always fail.
+       *
+       * @param {string} route - provider route id.
+       * @param {string} model - model id.
+       * @returns {string[]} accepted levels, empty when nothing was measured.
+       */
+      const measuredOf = (route, model) => {
+        const entries = snap !== null && Array.isArray(snap.models) ? snap.models : []
+        const entry = entries.find(candidate => candidate.model === model
+          && (candidate.routes ?? []).some(routeEntry => routeEntry.route === route))
+        const accepted = entry?.levels?.accepted
+        return Array.isArray(accepted) ? accepted : []
+      }
+
+      // What the trigger's second segment says, and whether it is a control.
+      //
+      // Three states, all always visible: adjustable (the declared levels), a single
+      // declared level (read-only), and no declaration at all — where the honest
+      // answer is "the upstream decides", not "off". Omitting the field does not
+      // mean "no thinking": on this gateway it measured identical to `max`.
+      const currentReasoning = current === null
+        ? undefined
+        : reasoningOf(current.provider, current.model)
+      const selectedEffort = current === null ? undefined : current.reasoningEffort
+      const effectiveEffort = selectedEffort ?? currentReasoning?.defaultEffort
+      const currentMeasured = current === null ? [] : measuredOf(current.provider, current.model)
+      // Four states, not three: a model the probe measured but the config never
+      // declared is its own case — it CANNOT be switched, but the reason is actionable,
+      // so the segment stays clickable and the menu explains what to do.
+      const effortState = currentReasoning !== undefined
+        ? (currentReasoning.efforts.length > 1 ? 'adjustable' : 'single')
+        : (currentMeasured.length > 0 ? 'measured' : 'undeclared')
+      const effortLabel = current === null
+        ? ''
+        : currentReasoning === undefined || effectiveEffort === undefined
+          ? t('effortDefault')
+          : levelName(currentReasoning, effectiveEffort)
+      const effortTitle = effortState === 'adjustable'
+        ? `${t('effortName')} · ${effortLabel}`
+        : effortState === 'single'
+          ? t('effortSingle')
+          : effortState === 'measured'
+            ? `${t('effortMeasuredHint')} · ${currentMeasured.join(' · ')}`
+            : t('effortUpstreamNote')
+      const levelChoices = useMemo(() => {
+        if (currentReasoning === undefined) return []
+        return [
+          // Offered only when the model names no default: when it does, that level is
+          // the provider's own answer and a separate "default" row would be a second
+          // spelling of it.
+          ...currentReasoning.defaultEffort === undefined
+            ? [{ key: '__default__', effort: undefined, label: t('effortDefaultFull') }]
+            : [],
+          ...currentReasoning.efforts.map(level => ({
+            key: level.id,
+            effort: level.id,
+            label: level.name === '' ? level.id : level.name,
+            description: level.description,
+          })),
+        ]
+      }, [currentReasoning, t])
+
+      const placeLevel = useCallback(() => {
+        const node = levelRef.current
+        if (node === null) return
+        const rect = node.getBoundingClientRect()
+        const width = 176
+        const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
+        setLevelPos({
+          left: `${left}px`,
+          width: `${width}px`,
+          bottom: `${Math.max(8, window.innerHeight - rect.top + 8)}px`,
+        })
+      }, [])
+
+      useEffect(() => {
+        if (!levelOpen) return undefined
+        placeLevel()
+        const onDown = (event) => {
+          if (levelMenuRef.current !== null && levelMenuRef.current.contains(event.target)) return
+          if (levelRef.current !== null && levelRef.current.contains(event.target)) return
+          setLevelOpen(false)
+        }
+        const onKey = (event) => { if (event.key === 'Escape') setLevelOpen(false) }
+        document.addEventListener('mousedown', onDown, true)
+        document.addEventListener('keydown', onKey)
+        window.addEventListener('resize', placeLevel)
+        return () => {
+          document.removeEventListener('mousedown', onDown, true)
+          document.removeEventListener('keydown', onKey)
+          window.removeEventListener('resize', placeLevel)
+        }
+      }, [levelOpen, placeLevel])
+
+      // Changing a level is a selection in its own right — it names the same model
+      // the session already has and only moves the effort — so it goes through the
+      // same verb the row click uses. An undefined effort is "no explicit level",
+      // which is what the Host reads as the provider's own default.
+      const applyEffort = useCallback(async (effort) => {
+        if (current === null) return
+        setFailure('')
+        const result = await select({
+          provider: current.provider,
+          model: current.model,
+          ...(effort === undefined ? {} : { reasoningEffort: effort }),
+        })
+        if (result && result.ok === false) {
+          const error = result.error
+          setFailure(error && error.message ? error.message : JSON.stringify(error))
+          return
+        }
+        setLevelOpen(false)
+      }, [select, current])
 
       if (available !== true) return null
 
@@ -1611,26 +2044,54 @@ window.__ModuleLoader__.load({
        * rather than drifting to the right edge, so a row reads the same way in both
        * surfaces.
        */
+      /**
+       * Whether a row has measured levels its declaration does not carry.
+       * @param {object} row - the row.
+       * @returns {boolean} true when the probe learned something the config lacks.
+       */
+      const needsDeclaration = (row) => {
+        const measured = row.levels === null || row.levels === undefined ? [] : (row.levels.accepted ?? [])
+        if (measured.length === 0) return false
+        const declared = (reasoningOf(row.route, row.model)?.efforts ?? []).map(level => level.id)
+        return declared.length === 0 || measured.some(level => !declared.includes(level))
+      }
+
       const renderItem = (row, showRoute, hero) => {
-        const overlayRow = overlay.get(`${row.route}/${row.model}`)
-        const status = overlayRow ? overlayRow.status : 'unknown'
+        // The Host's own status wins: a model-first row carries it, and looking it up
+        // in the route-keyed overlay map would MISS (that map is keyed `route/model`,
+        // while a model-first row is keyed by model id) and silently fall back to
+        // "unknown" — which is exactly how every status dot went grey at once.
+        const overlayRow = overlay.get(rowKey(row)) ?? overlay.get(`${row.route}/${row.model}`)
+        const status = row.status !== undefined ? row.status : (overlayRow ? overlayRow.status : 'unknown')
         const down = isProblem(status)
         const active = current !== null && current.provider === row.route && current.model === row.model
         const usage = row.usage
         // Only a model that has actually been used earns a chip: a row of "Lv.1"
         // badges on an untouched catalogue is noise, not information.
         const leveled = usage !== null && usage !== undefined && usage.uses > 0
-        const key = `${row.route}/${row.model}`
+        const key = rowKey(row)
         const expanded = detailKeys.has(key)
-        const act = (icon, label, active, on, pendingKey, danger) => h('button', {
-          type: 'button',
-          className: `llmm-act${active ? ' llmm-act-on' : ''}${danger === true ? ' llmm-act-danger' : ''}`,
-          'aria-pressed': active ? 'true' : undefined,
-          disabled: pending === pendingKey,
-          onClick: on,
-        }, h(Icon, { name: pending === pendingKey ? 'spinner' : icon, spin: pending === pendingKey, filled: active }),
-        h('span', null, pending === pendingKey && pendingKey.startsWith('probe:') ? t('probing') : label))
-        const toggleDetail = () => setDetailKeys((currentKeys) => {
+        // Only an adjustable model carries a chip. Stamping "default" on the other
+        // seventy-odd rows would turn a capability signal into noise, and the one
+        // thing worth seeing while scrolling is which rows can be tuned at all.
+        const rowReasoning = reasoningOf(row.route, row.model)
+        const rowEffort = rowReasoning === undefined || rowReasoning.efforts.length < 2
+          ? undefined
+          : levelName(rowReasoning, row.reasoningEffort ?? rowReasoning.defaultEffort)
+        // Icon-only, like the panel's row actions: four labels of different lengths
+        // cannot line up in a row, and the label a text button spelled out is what the
+        // hover tooltip is for.
+        const act = (icon, label, active, on, pendingKey, danger) => h(IconButton, {
+          icon,
+          label,
+          active,
+          danger: danger === true,
+          filled: active,
+          pending: pending === pendingKey,
+          tip: tipChannel,
+          on,
+        })
+          const toggleDetail = () => setDetailKeys((currentKeys) => {
           const next = new Set(currentKeys)
           if (next.has(key)) next.delete(key)
           else next.add(key)
@@ -1665,6 +2126,9 @@ window.__ModuleLoader__.load({
               // chips, so the menu reads the same way as the panel.
               leveled ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(usage.level, 7)}` },
                 `${t('levelShort')}.${usage.level}`) : null,
+              rowEffort === undefined
+                ? null
+                : h('span', { className: 'llmm-chip llmm-chip-effort', title: t('effortName') }, rowEffort),
               // The trailing count is what makes the arrow mean something: "busier"
               // without a number cannot be told apart from one extra request. A model
               // idle for a week keeps its level but shows no trend, because there is
@@ -1704,8 +2168,14 @@ window.__ModuleLoader__.load({
           // model name, so neither can be always-on; a chevron costs one glyph and
           // keeps every action reachable by pointer, keyboard and touch.
           expanded
-            ? h('div', { className: 'llmm-detail llmm-detail-pick' },
-              h('div', { className: 'llmm-acts' },
+            ? h(ModelDetail, {
+              row,
+              pick: true,
+              declared: (reasoningOf(row.route, row.model)?.efforts ?? []).map(level => level.id),
+              // Offered only where the probe measured a level the declaration lacks: the
+              // action belongs beside the fact it acts on.
+              onDeclare: needsDeclaration(row) ? () => { declare(row) } : undefined,
+              actions: [
                 act('pin', row.pinned ? t('unpin') : t('pin'), row.pinned,
                   () => mutate(row, 'pins', !row.pinned), `pins:${key}`),
                 act('star', row.favorite ? t('unfavorite') : t('favorite'), row.favorite,
@@ -1713,12 +2183,33 @@ window.__ModuleLoader__.load({
                 act(row.hidden ? 'eyeOff' : 'eye', row.hidden ? t('unhide') : t('hide'), row.hidden,
                   () => mutate(row, 'hidden', !row.hidden), `hidden:${key}`),
                 act('pulse', t('probe'), false, () => probe(row), `probe:${key}`, isProblem(status)),
-              ),
-              // The same record the panel shows, from the same component: one
-              // description of a model, not two that can drift apart.
-              h(ModelDetail, { row }),
-            )
-            : null,
+              ],
+              // Which route serves this model, when more than one does: a wrapper route is
+              // a property of the model, not a second model.
+              extra: Array.isArray(row.routes) && row.routes.length > 1
+                ? h('div', { className: 'llmm-routes' },
+                  h('div', { className: 'llmm-routes-label' }, t('routeSection')),
+                  row.routes.map(route => {
+                    const on = current !== null && current.provider === route.route
+                      && current.model === row.model
+                    return h('button', {
+                      key: route.route,
+                      type: 'button',
+                      className: `llmm-route-choice${on ? ' llmm-route-on' : ''}`,
+                      'aria-pressed': on,
+                      title: route.reason === '' ? statusLabel(route.status) : route.reason,
+                      onClick: () => { chooseRoute(row, route.route) },
+                    },
+                      h('span', { className: 'llmm-route-name' }, route.name || route.route),
+                      on
+                        ? h('span', { className: 'llmm-chip' }, t('selected'))
+                        : h('span', { className: 'llmm-chip' }, statusLabel(route.status)),
+                    )
+                  }),
+                )
+                : null,
+            })
+          : null,
         )
       }
 
@@ -1732,7 +2223,15 @@ window.__ModuleLoader__.load({
        */
       const renderSection = (key, title, rows, hero) => h('div', { key },
         h('div', { className: 'llmm-group' }, `${title} (${rows.length})`),
-        rows.map(row => renderItem(row, spansRoutes(rows), hero === true)),
+        // Per row, not per section: a section that mixes a shared model with
+        // single-route ones must not stamp a route label on the ones that have no
+        // other route to name. `spansRoutes` stays as the fallback for a catalog that
+        // reports no per-row routes at all.
+        rows.map(row => renderItem(
+          row,
+          Array.isArray(row.alsoOn) ? row.alsoOn.length > 0 : spansRoutes(rows),
+          hero === true,
+        )),
       )
 
       const shown = sections.pinned.length + sections.favorites.length + sections.frequent.length
@@ -1816,6 +2315,56 @@ window.__ModuleLoader__.load({
         failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,
       )
 
+      // The level menu's rows are the model's own declaration, never a fixed list:
+      // one gateway accepts low/high/max and rejects medium, another accepts all
+      // seven, and a model that always thinks rejects "off" outright. Rendering a
+      // hardcoded set would offer choices that fail on submit.
+      const levelMenu = h('div', {
+        ref: levelMenuRef,
+        className: 'llmm-effort-menu',
+        style: levelPos,
+        role: 'menu',
+        'aria-label': t('effortName'),
+      },
+        // A measured-but-undeclared model gets the explanation and the one action that
+        // unlocks it, never a list of levels that would be rejected on click.
+        effortState === 'measured'
+          ? h('div', { className: 'llmm-effort-note' }, t('effortMeasuredHint'))
+          : null,
+        effortState === 'measured'
+          ? h('button', {
+            type: 'button',
+            className: 'llmm-effort-item llmm-effort-declare',
+            onClick: () => {
+              if (current !== null) declare({ route: current.provider, model: current.model })
+              setLevelOpen(false)
+            },
+          }, t('effortDeclareNow'), h('span', { className: 'llmm-effort-mark', 'aria-hidden': true }, '↵'))
+          : null,
+        effortState === 'measured'
+          ? null
+          : levelChoices.length === 0
+            ? h('div', { className: 'llmm-effort-note' }, effortTitle)
+            : null,
+        levelChoices.map(choice => {
+          const on = choice.effort === undefined
+            ? effectiveEffort === undefined
+            : choice.effort === effectiveEffort
+          return h('button', {
+            key: choice.key,
+            type: 'button',
+            role: 'menuitemradio',
+            'aria-checked': on,
+            className: `llmm-effort-item${on ? ' llmm-effort-on' : ''}`,
+            title: choice.description === undefined ? choice.label : choice.description,
+            onClick: () => { applyEffort(choice.effort) },
+          },
+            h('span', null, choice.label),
+            h('span', { className: 'llmm-effort-mark', 'aria-hidden': true }, on ? '✓' : ''),
+          )
+        }),
+      )
+
       return h(React.Fragment, null,
         h(Style),
         h('div', { className: 'llmm-root', style: { display: 'inline-flex' } },
@@ -1831,14 +2380,53 @@ window.__ModuleLoader__.load({
             onClick: () => {
               setFrozenFlags(null)
               setDetailKeys((currentKeys) => (currentKeys.size === 0 ? currentKeys : new Set()))
+              // Two portals anchored to the same composer cannot both own the
+              // document-level dismiss, so opening one closes the other.
+              setLevelOpen(false)
               setOpen(value => !value)
             },
           },
             h('span', { className: 'llmm-trigger-label' }, triggerLabel),
             h('span', { 'aria-hidden': true }, '▾'),
           ),
+          // The second segment answers "what am I getting?" even where it cannot be
+          // changed: an omitted level is NOT "no thinking" — on this gateway it
+          // measured identical to `max` — so hiding the row would leave the user
+          // reading a default as if it were off.
+          current === null ? null : h('button', {
+            ref: levelRef,
+            type: 'button',
+            className: `llmm-trigger llmm-effort${effortState === 'adjustable' || effortState === 'measured' ? '' : ' llmm-effort-static'}`,
+            'aria-disabled': locked || (effortState !== 'adjustable' && effortState !== 'measured'),
+            'aria-haspopup': effortState === 'adjustable' || effortState === 'measured' ? 'menu' : undefined,
+            title: effortTitle,
+            onClick: () => {
+              // A measured-but-undeclared model opens the menu too: the levels exist,
+              // the declaration does not, and the menu is where that is explained and
+              // fixed. Only a model the probe never touched stays a plain label.
+              if (locked || (effortState !== 'adjustable' && effortState !== 'measured')) return
+              setOpen(false)
+              setLevelOpen(value => !value)
+            },
+          },
+            h('span', { className: 'llmm-effort-sep', 'aria-hidden': true }, '·'),
+            h('span', { className: 'llmm-trigger-label' }, effortLabel),
+            effortState === 'adjustable' || effortState === 'measured'
+              ? h('span', { 'aria-hidden': true }, '▾')
+              : null,
+          ),
         ),
         open && position !== null ? createPortal(card, document.body) : null,
+        levelOpen && levelPos !== null ? createPortal(levelMenu, document.body) : null,
+        // The label an icon cannot spell. Portalled for the same reason the card is:
+        // an ancestor with overflow would clip a fixed child out of position.
+        tip !== null
+          ? createPortal(h('div', {
+            className: 'llmm-tip',
+            style: { left: `${tip.x}px`, top: `${tip.y}px` },
+            role: 'tooltip',
+          }, tip.text), document.body)
+          : null,
       )
     }
 
@@ -1954,6 +2542,14 @@ window.__ModuleLoader__.load({
       // shipped picker declares the same key set for the same reason.
       inject: ['slots', 'modelDirectories', 'sessions', 'remote', 'remote.session'],
       apply(ctx) {
+        // `selector.mode` cannot arrive as a second argument: the client runtime hands
+        // a plugin only its module URL (`__DSH_BOOT__` entries are { id, url, rev }),
+        // never the Loader row config, so `apply(ctx, config)` receives undefined in
+        // the real app and `native` stayed inert. The Host is asked instead — and
+        // because that answer is asynchronous, the picker registers immediately (the
+        // managed default) and RELEASES the seat only if the answer is `native`. The
+        // normal path therefore gains no latency and no flash; the inspection path
+        // pays a few milliseconds and flashes the shipped picker once.
         // The panel rides the provider card its settings namespace owns, which
         // is where this route's models are already configured.
         ctx.slots.inject('settings.models.provider-card', () => ctx.slots.register({
@@ -1975,7 +2571,11 @@ window.__ModuleLoader__.load({
         // favorites come first. The seat is `single`, so this registration must
         // supply the business face the shipped one does: the same directory
         // store and the same select verb, taken from the same services.
-        ctx.slots.inject('conversation.input.model', () => {
+        //
+        // Only in `managed` mode: `native` exists precisely to hand the seat back
+        // to the shipped picker, and registering here regardless is what made that
+        // setting inert.
+        const releasePicker = ctx.slots.inject('conversation.input.model', () => {
           const models = ctx.modelDirectories
           const sessions = ctx.sessions
           return ctx.slots.register({
@@ -2000,6 +2600,38 @@ window.__ModuleLoader__.load({
             },
           }, Picker)
         })
+        // `native` means hand the seat back to the shipped picker.
+        //
+        // The cheap action is asked first and the snapshot is the fallback, because
+        // the two halves can legitimately be out of step: the browser always loads
+        // this client half fresh, while a Host that has not been restarted since a
+        // plugin upgrade still serves the older action set. Keying on a single new
+        // action would make the mode look inert until a restart — which is exactly
+        // how this feature spent its first two attempts failing.
+        const readSelectorMode = async () => {
+          try {
+            return (await callHost({ action: 'selectorMode' })).value
+          } catch { /* older Host: fall through to the snapshot */ }
+          try {
+            return (await callHost({ action: 'snapshot' })).value
+          } catch {
+            return null
+          }
+        }
+        // A null answer must NOT release it: an unreachable Host would then silently
+        // drop a control the user is looking at, which is worse than the managed
+        // picker they expected.
+        readSelectorMode()
+          .then((value) => {
+            // Guarded: if this platform's `slots.inject` ever stops returning a
+            // disposer, a throw here would be swallowed below and the mode would look
+            // inert again. Failing loudly in the console beats failing silently.
+            if (value !== null && value.selectorMode === 'native') {
+              if (typeof releasePicker === 'function') releasePicker()
+              else console.warn('llm-manage: slots.inject returned no disposer; selector.mode = native cannot be honoured')
+            }
+          })
+          .catch(() => { /* keep the picker */ })
       },
     }
   },

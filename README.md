@@ -447,6 +447,31 @@ uses for "also on", and section headings in the secondary label color. The brand
 reserved for state — the panel's active controls and the picker's current row. Two suites
 assert this property by property, so the two surfaces cannot drift apart again.
 
+#### Reasoning levels
+
+A model that declares reasoning efforts gets a level segment on the trigger, beside the
+model name: `· High ▾`. Clicking it opens the levels **that model declared**, and the choice
+applies to the current session — no second menu, no settings round-trip.
+
+Two different facts decide what that segment can offer, and conflating them is the trap:
+
+- **Measured** — what the gateway accepted when the model was probed. A probe sweeps
+  `minimal` through `max`, one tiny request per level, and keeps both the accepted and the
+  refused answers.
+- **Declared** — what the provider's `reasoningEfforts` config names. The harness validates a
+  switch against *this*, so a level the gateway accepts but nobody declared is offered by
+  nobody: the segment reads `default` and cannot be changed, however good the probe's answer.
+
+Since 0.1.3 a probe closes that gap itself: when the sweep measures any level, the answer is
+written back through the Host's settings service in the same call, so the levels the gateway
+accepts become switchable without a second click. The write touches only that one model's
+`reasoningEfforts`; deleting those keys restores the previous state. A route whose settings
+the Host cannot edit simply gets no declaration — the probe's verdict still returns, and the
+detail block keeps its manual **Use measured levels** action as the fallback.
+
+A level the provider refuses is repaired rather than repeated: the session moves to the
+model's own default effort, once per turn, and the retry carries the corrected level.
+
 ### Panel controls
 
 Row actions are **icon-only** buttons with the label on hover and on keyboard focus, so

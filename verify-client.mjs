@@ -88,10 +88,23 @@ const llmService = {
   listConfigurableProviders: () => [{ provider: ROUTE, displayName: DISPLAY_NAME, settingsNs: SETTINGS_NS, settingsPath: ['providers', ROUTE] }],
   listModels: async (id) => (id === SECOND_ROUTE ? MIRRORED : MODELS).map(model => ({ id: model, name: model })),
 }
+/** Settings section as last written through the host, plus the writes themselves. */
+let settingsValue = SETTINGS
+const settingsWrites = []
 const hostGet = (k) => {
   if (k === 'connection') return connection
   if (k === 'llm') return llmService
-  if (k === 'settings') return { describe: () => [{ ns: SETTINGS_NS, autoInitialize: false, schema: {}, revision: 1, applies: 'live', value: SETTINGS, base: SETTINGS, user: SETTINGS }] }
+  if (k === 'settings') {
+    // Writable, because declaring measured levels goes through the same path the
+    // settings UI uses. The writes are recorded so a click can be verified.
+    return {
+      describe: () => [{
+        ns: SETTINGS_NS, autoInitialize: false, schema: {}, revision: 1 + settingsWrites.length,
+        applies: 'live', value: settingsValue, base: SETTINGS, user: settingsValue,
+      }],
+      replace: async (ns, section) => { settingsWrites.push({ ns, section: structuredClone(section) }); settingsValue = section },
+    }
+  }
   if (k === 'credentials') return { resolve: async () => ({ value: API_KEY, source: 'test' }) }
   return undefined
 }
@@ -567,19 +580,22 @@ check('the panel adopts the Host snapshot, not just its optimistic guess',
     })
     const detail = detailOf(pinTarget)
     check('the chevron opens a detail block under its own row',
-      detail !== null && detail.querySelectorAll('.llmm-field').length >= 3,
-      `${detail?.querySelectorAll('.llmm-field').length ?? 0} field(s)`)
+      detail !== null && detail.querySelector('.llmm-detail-summary') !== null
+        && detail.querySelectorAll('.llmm-detail-line').length >= 1,
+      `${detail?.querySelectorAll('.llmm-detail-line').length ?? 0} line(s)`)
     check('the disclosure reports its state',
       chevronFor(pinTarget).getAttribute('aria-expanded') === 'true',
       chevronFor(pinTarget).getAttribute('aria-expanded') ?? 'unset')
-    check('the detail block shows the fields the row has no room for',
-      Array.from(detail?.querySelectorAll('.llmm-field-label') ?? []).length >= 3,
-      Array.from(detail?.querySelectorAll('.llmm-field-label') ?? []).map(n => n.textContent).join(', ').slice(0, 140))
+    check('the detail block shows the facts the row has no room for',
+      Array.from(detail?.querySelectorAll('.llmm-detail-line-label') ?? []).length >= 1,
+      Array.from(detail?.querySelectorAll('.llmm-detail-line-label') ?? []).map(n => n.textContent).join(', ').slice(0, 140))
 
     // A row that carries usage is the interesting case: the numbers exist, the row
     // has no room for them, and the detail block is where they have to appear.
-    const detailField = (node, labelPattern) => Array.from(node?.querySelectorAll('.llmm-field') ?? [])
-      .find(f => labelPattern.test(f.querySelector('.llmm-field-label')?.textContent ?? ''))
+    // A profile line: label on the left, value on the right. The block used to be a
+    // fifteen-row form; these assertions follow the shape it has now.
+    const detailField = (node, labelPattern) => Array.from(node?.querySelectorAll('.llmm-detail-line') ?? [])
+      .find(line => labelPattern.test(line.querySelector('.llmm-detail-line-label')?.textContent ?? ''))
     const usedName = shownNames().find(name => rowFor(name)?.querySelector('.llmm-lv') !== null)
     if (usedName !== undefined && detailOf(usedName) === null) {
       await act(async () => {
@@ -588,25 +604,21 @@ check('the panel adopts the Host snapshot, not just its optimistic guess',
       })
     }
     const usedDetail = usedName === undefined ? null : detailOf(usedName)
+    const usedText = usedDetail?.textContent ?? ''
     check('a used row\'s detail block carries the usage numbers',
-      usedDetail !== null
-      && detailField(usedDetail, /Uses|调用次数/) !== undefined
-      && detailField(usedDetail, /Tokens|token/) !== undefined,
-      usedName === undefined ? 'no used row on screen'
-        : Array.from(usedDetail?.querySelectorAll('.llmm-field-label') ?? []).map(n => n.textContent).join(', ').slice(0, 160))
+  usedDetail !== null && /uses|次调用/i.test(usedText) && /tokens/i.test(usedText),
+      usedName === undefined ? 'no used row on screen' : usedText.slice(0, 160))
     // The reason must be the same string in both places, and it must lead the
     // compact row — trailing `source · age` is what let the ellipsis eat it. Read
     // from the detail block rather than from a fixture, so this holds whatever
     // reason the Host actually reports.
-    const reasonField = detailField(usedDetail, /Reason|原因/)
-    const reasonValue = reasonField?.querySelector('.llmm-field-value')?.textContent ?? ''
-    // Conditional on the Host reporting a reason at all: in an environment whose
-    // rows carry none, the check reports that rather than passing as if it had
-    // exercised the ordering.
-    check('the reason the Host reports leads the compact row (skipped when there is none)',
-      reasonValue === '' || (rowFor(usedName)?.querySelector('.llmm-why')?.textContent ?? '').startsWith(reasonValue),
-      reasonValue === '' ? 'the row reports no reason'
-        : `reason="${reasonValue.slice(0, 48)}" why="${(rowFor(usedName)?.querySelector('.llmm-why')?.textContent ?? '').slice(0, 48)}"`)
+    // The reason now lives in the summary line, not in a labelled row: the block is
+    // a profile, so it answers in a sentence rather than in fields.
+    const summaryText = usedDetail?.querySelector('.llmm-detail-summary-text')?.textContent ?? ''
+    const rowWhy = (rowFor(usedName)?.querySelector('.llmm-why')?.textContent ?? '').trim()
+    check('the compact summary leads with how to read the row (skipped when there is no reason)',
+      summaryText !== '' && (rowWhy === '' || summaryText.startsWith(rowWhy)),
+      `summary="${summaryText.slice(0, 48)}" why="${rowWhy.slice(0, 48)}"`)
     if (usedName !== undefined) {
       await act(async () => {
         chevronFor(usedName).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
@@ -885,9 +897,12 @@ check('no model is offered twice, across every section', duplicated.length === 0
 // still offered. Counted against the Host's own snapshot so that this holds in
 // both modes, at any catalogue size.
 const snapshot = (await (await hostCall({ action: 'snapshot' })).json()).value
-const expectedRows = snapshot.groups.reduce(
-  (total, group) => total + group.rows.filter(row => !row.hidden).length, 0,
-)
+// Model-first: the menu offers one row per MODEL, so the count to match is the
+// number of distinct visible model ids — not the number of route rows, which is
+// larger exactly when two routes serve one model (this fixture does, twice).
+const expectedRows = Array.isArray(snapshot.models)
+  ? snapshot.models.filter(entry => entry.hidden !== true).length
+  : new Set(snapshot.groups.flatMap(group => group.rows.filter(row => !row.hidden).map(row => row.model))).size
 check('every listed model is still offered exactly once',
   [...counts.values()].reduce((a, b) => a + b, 0) === expectedRows,
   `${[...counts.values()].reduce((a, b) => a + b, 0)} rows for ${expectedRows} listed`)
@@ -897,13 +912,58 @@ check('every listed model is still offered exactly once',
 // route's heading to say which one it is. A section that stays on one route must
 // NOT name routes, or the label is noise on every row.
 const pinnedSection = pinnedAt >= 0 ? open[pinnedAt] : { items: [] }
-const mirrorRow = pinnedSection.items.find(row => row.name === mirroredPin && row.route === SECOND_ROUTE)
-check('a lifted row from another route names its route', mirrorRow !== undefined && mirrorRow.route === SECOND_ROUTE,
-  JSON.stringify(mirrorRow ?? null))
+// The chip now names the OTHER route instead of repeating the row's own: the row is
+// the model, and its section heading already names the family it belongs to.
+const mirrorRow = pinnedSection.items.find(row => row.name === mirroredPin)
+check('a lifted row reachable on another route names that route',
+  mirrorRow !== undefined && mirrorRow.route !== '', JSON.stringify(mirrorRow ?? null))
 const favoriteSection = favoritesAt >= 0 ? open[favoritesAt] : { items: [] }
 check('a lifted section on one route names none',
   favoriteSection.items.length > 0 && favoriteSection.items.every(row => row.route === ''),
   favoriteSection.items.map(row => `${row.name}${row.route === '' ? '' : `[${row.route}]`}`).join(', '))
+
+// The status dot is the only at-a-glance "can I use this" signal, and it had no
+// assertion at all: a key mismatch between the row and the overlay map turned every
+// dot grey while the rest of this suite stayed green. The status is produced by a
+// probe rather than assumed from the fixture, so this tests the wiring and not luck.
+{
+  const DOTTED = at(4)
+  // Both helpers below are declared further down this file, so this block resolves
+  // its own row rather than reaching forward into a TDZ.
+  const dottedRow = () => Array.from(pickerMenu()?.querySelectorAll('.llmm-item') ?? [])
+    .find(item => item.querySelector('.llmm-name')?.textContent === DOTTED) ?? null
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => (String(url).includes('/chat/completions')
+    ? syntheticGatewayFetch(url, init)
+    : realFetch(url, init))
+  try {
+    await hostCall({ action: 'probe', route: ROUTE, model: DOTTED })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  await act(async () => { pickerRoot.render(null) })
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+  // `ensureOpen` is defined further down, so open it here instead of hoisting into TDZ.
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+    })
+  }
+  await act(async () => {
+    const input = pickerMenuQuery('.llmm-input')
+    if (input !== null) {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, '')
+      input.dispatchEvent(new window.Event('input', { bubbles: true }))
+    }
+    await waitFor(() => dottedRow() !== null)
+  })
+  const dotClass = dottedRow()?.querySelector('.llmm-dot')?.className ?? ''
+  check('a usable row paints its health tone, not the idle one',
+    /llmm-dot ok/.test(dotClass), dotClass || 'no dot')
+}
 
 // ── the picker manages models, not just lists them ──────────────────────────
 // Pin, favorite, hide and probe used to be reachable only from the settings
@@ -947,18 +1007,40 @@ await act(async () => {
   await waitFor(() => pickerDetailOf(manageTarget) !== null)
 })
 const block = pickerDetailOf(manageTarget)
-check('the disclosure opens the row\'s management block',
-  block !== null && block.querySelectorAll('.llmm-act').length === 4,
-  `${block?.querySelectorAll('.llmm-act').length ?? 0} action(s)`)
-check('the actions are labelled rather than icon-only',
-  Array.from(block?.querySelectorAll('.llmm-act') ?? [])
-    .every(button => (button.textContent ?? '').trim().length > 0),
-  Array.from(block?.querySelectorAll('.llmm-act') ?? []).map(b => b.textContent).join(' / '))
+check('the disclosure opens the row management block',
+  block !== null && block.querySelectorAll('.llmm-ibtn').length === 4,
+  `${block?.querySelectorAll('.llmm-ibtn').length ?? 0} action(s)`)
+// Icon-only on purpose: four labels of different lengths could not line up, and the
+// label a text button spelled out is what the hover tooltip now carries. What must
+// not be lost is the accessible name — an icon with no aria-label is unreadable.
+check('the actions are icon-only with an accessible label',
+  Array.from(block?.querySelectorAll('.llmm-ibtn') ?? []).every(button => (button.textContent ?? '').trim() === ''
+    && (button.getAttribute('aria-label') ?? '').trim().length > 0),
+  Array.from(block?.querySelectorAll('.llmm-ibtn') ?? [])
+    .map(b => `${(b.getAttribute('aria-label') ?? '?')}[${(b.textContent ?? '').trim()}]`).join(' / '))
+
+// The label the icon cannot spell appears on hover, which is the whole point of
+// going icon-only: the action row stays narrow without becoming a guessing game.
+const hoverAction = block?.querySelectorAll('.llmm-ibtn')[0] ?? null
+// Clear any tooltip another surface left behind, then hover with `mouseover`:
+// React synthesises `onMouseEnter` from it, so a raw `mouseenter` never fires.
+for (const stale of Array.from(window.document.querySelectorAll('.llmm-tip'))) stale.remove()
+await act(async () => {
+  hoverAction?.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+  await waitFor(() => window.document.querySelector('.llmm-tip') !== null)
+})
+const hoverTip = window.document.querySelector('.llmm-tip')
+check('hovering an action reveals the label it cannot spell',
+  hoverTip !== null && (hoverTip.textContent ?? '') === (hoverAction?.getAttribute('aria-label') ?? null),
+  `${hoverTip?.textContent ?? 'no tooltip'} vs ${hoverAction?.getAttribute('aria-label') ?? 'none'}`)
+await act(async () => {
+  hoverAction?.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true }))
+})
 // The block reuses the panel's own record component, so the two surfaces cannot
 // describe the same model differently.
 check('the block carries the same record the panel shows',
-  (block?.querySelectorAll('.llmm-field').length ?? 0) >= 3,
-  Array.from(block?.querySelectorAll('.llmm-field-label') ?? []).map(n => n.textContent).join(', ').slice(0, 140))
+  (block?.querySelectorAll('.llmm-detail-line').length ?? 0) >= 1,
+  Array.from(block?.querySelectorAll('.llmm-detail-line-label') ?? []).map(n => n.textContent).join(', ').slice(0, 140))
 const disclosureState = chevronOf(manageTarget).getAttribute('aria-expanded')
 check('the disclosure reports its state', disclosureState === 'true', disclosureState ?? 'unset')
 
@@ -967,30 +1049,34 @@ check('the disclosure reports its state', disclosureState === 'true', disclosure
 // group entirely. The order is frozen at the first toggle and settled when the
 // menu is next opened.
 const beforePin = pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`)
-const pinAction = Array.from(block.querySelectorAll('.llmm-act'))
-  .find(button => /置顶|取消置顶|Pin|Unpin/.test(button.textContent ?? ''))
+const pinAction = Array.from(block.querySelectorAll('.llmm-ibtn'))
+  .find(button => /置顶|取消置顶|Pin|Unpin/.test(button.getAttribute('aria-label') ?? ''))
+// The state lives in aria-pressed now that the label is a tooltip: reading the text
+// would always succeed and would never prove the click landed.
+const pinPressed = () => pinAction.getAttribute('aria-pressed') === 'true'
+const wasPinned = pinPressed()
 await act(async () => {
   pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-  await waitFor(() => /取消置顶|Unpin/.test(pinAction.textContent ?? ''))
+  await waitFor(() => pinPressed() !== wasPinned)
 })
 check('pinning from the picker does not move the row between sections',
   pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`).join('|')
     === beforePin.join('|'),
   `${manageTarget} was in ${beforePin.find(s => s.includes(manageTarget))?.split(':')[0]}`
   + `, now ${pickerSections().map(s => `${s.title}:${s.items.map(r => r.name).join(',')}`).find(s => s.includes(manageTarget))?.split(':')[0]}`)
-check('the pin takes effect in place, from the Host\'s own answer',
-  /取消置顶|Unpin/.test(pinAction.textContent ?? ''),
-  pinAction.textContent ?? 'no pin action')
+check('the pin takes effect in place, from the Host own answer',
+  pinPressed() !== wasPinned,
+  `${pinAction.getAttribute('aria-label') ?? 'no pin action'} pressed=${pinPressed()}`)
 // Put it back: the pinned set is a fixture for the sections asserted above.
 await act(async () => {
   pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-  await waitFor(() => /^(置顶|Pin)$/.test(pinAction.textContent ?? ''))
+  await waitFor(() => pinPressed() === wasPinned)
 })
 
 // Hiding must not be a one-way door: the row leaves the menu, and a section at
 // the bottom offers it back.
-const hideAction = Array.from(block.querySelectorAll('.llmm-act'))
-  .find(button => /隐藏|Hide/.test(button.textContent ?? ''))
+const hideAction = Array.from(block.querySelectorAll('.llmm-ibtn'))
+  .find(button => /隐藏|Hide/.test(button.getAttribute('aria-label') ?? ''))
 await act(async () => {
   hideAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
   await waitFor(() => pickerSections().some(section => /^(Hidden|已隐藏)/.test(section.title)))
@@ -1015,10 +1101,10 @@ if (pickerDetailOf(manageTarget) === null) {
     await waitFor(() => pickerDetailOf(manageTarget) !== null)
   })
 }
-const unhideButton = Array.from(pickerDetailOf(manageTarget)?.querySelectorAll('.llmm-act') ?? [])
-  .find(button => /取消隐藏|Unhide/.test(button.textContent ?? ''))
+const unhideButton = Array.from(pickerDetailOf(manageTarget)?.querySelectorAll('.llmm-ibtn') ?? [])
+  .find(button => /取消隐藏|Unhide/.test(button.getAttribute('aria-label') ?? ''))
 check('the Hidden section offers the way back',
-  unhideButton !== undefined, unhideButton?.textContent ?? 'no unhide action')
+  unhideButton !== undefined, unhideButton?.getAttribute('aria-label') ?? 'no unhide action')
 if (unhideButton !== undefined) {
   await act(async () => {
     unhideButton.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
@@ -1363,10 +1449,14 @@ check('the route label is rendered as the panel\'s own chip',
 // reporting a failure — which would hide every check after this one.
 const menuBody = pickerMenuQuery('.llmm-menu-body')
 const pinnedBody = pinnedAt >= 0 && menuBody !== null ? menuBody.children[pinnedAt] : null
+// The row is a MODEL now, so it is found by name; what must not be dropped is the
+// ROUTE the Host resolved for it — the one with history behind it, which may be the
+// non-primary route and is exactly what a naive `row.route` default gets wrong.
 const mirrorButton = pinnedBody === null
   ? null
   : Array.from(pinnedBody.querySelectorAll('.llmm-item'))
-    .find(item => item.querySelector('.llmm-route')?.textContent === SECOND_ROUTE)
+    .find(item => item.querySelector('.llmm-name')?.textContent === mirroredPin) ?? null
+const mirroredPrimary = (snapshot.models ?? []).find(entry => entry.model === mirroredPin)?.primary
 const selectionBefore = selections.length
 if (mirrorButton !== null) {
   await act(async () => {
@@ -1377,14 +1467,14 @@ if (mirrorButton !== null) {
     await waitFor(() => selections.length > selectionBefore)
   })
 }
-check('clicking a section row\'s selection control selects that row\'s own route and model',
+check('clicking a section row selects that model on the route the Host resolved',
   mirrorButton !== null
   && selections.length === selectionBefore + 1
-  && selections[selectionBefore].provider === SECOND_ROUTE
+  && selections[selectionBefore].provider === mirroredPrimary
   && selections[selectionBefore].model === mirroredPin,
   mirrorButton === null
-    ? 'the Pinned section offered no row naming another route'
-    : JSON.stringify(selections[selectionBefore] ?? null))
+    ? `the Pinned section offered no row for ${mirroredPin}`
+    : `${JSON.stringify(selections[selectionBefore] ?? null)} vs primary ${mirroredPrimary}`)
 
 /**
  * Open the menu unless it is already open.
@@ -1418,6 +1508,456 @@ check('search narrows the lifted sections as well as the route groups',
   searched.length > 0 && searched.includes(favoredModel) && searched.every(name => name === favoredModel),
   searched.join(', ') || '(nothing matched)')
 
+// ── the row is the MODEL; the route is how it is reached ────────────────────
+// Two routes serving one model id are one row, so the row has to say which route a
+// click uses. The Host decides that (`primary`, by usage); the picker must honour it
+// — and must NOT override a route the user is deliberately on.
+{
+  // The search box keeps whatever an earlier block typed into it, and the picker
+  // keeps one query for its lifetime; read the unfiltered list or every lookup below
+  // searches a one-row result.
+  const clearSearch = async () => {
+    const input = pickerMenuQuery('.llmm-input')
+    if (input === null) return
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    setter.call(input, '')
+    input.dispatchEvent(new window.Event('input', { bubbles: true }))
+    await waitFor(() => pickerSections().length > 1)
+  }
+  const target = mirroredPin
+  const entry = (snapshot.models ?? []).find(candidate => candidate.model === target)
+  const primary = entry?.primary
+  dirSnapshot.current = { provider: SECOND_ROUTE, model: target }
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+  await ensureOpen()
+  await clearSearch()
+  const before = selections.length
+  const row = pickerRowFor(target)
+  await act(async () => {
+    row?.querySelector('.llmm-item-select').dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => selections.length > before)
+  })
+  check('re-picking a model keeps the route already in use',
+    primary !== SECOND_ROUTE
+      && selections[before]?.provider === SECOND_ROUTE
+      && selections[before]?.model === target,
+    `${JSON.stringify(selections[before] ?? null)} while primary is ${primary}`)
+
+  // A model reads as pinned when ANY route is, so clearing the flag has to clear
+  // every route. Otherwise the row would keep reporting the state the click removed.
+  await hostCall({ action: 'toggle', route: ROUTE, model: target, list: 'pins', on: true })
+  dirSnapshot.current = null
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+  await ensureOpen()
+  await clearSearch()
+  const chevron = chevronOf(target)
+  if (chevron !== null) {
+    await act(async () => {
+      chevron.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerDetailOf(target) !== null)
+    })
+  }
+const unpin = Array.from(pickerDetailOf(target)?.querySelectorAll('.llmm-ibtn') ?? [])
+  .find(button => /取消置顶|Unpin/.test(button.getAttribute('aria-label') ?? ''))
+const unpinPressed = () => unpin?.getAttribute('aria-pressed') === 'true'
+const unpinWas = unpinPressed()
+await act(async () => {
+  unpin?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  await waitFor(() => unpinPressed() === false)
+})
+  const after = (await (await hostCall({ action: 'snapshot' })).json()).value
+  const cleared = (after.models ?? []).find(candidate => candidate.model === target)
+  check('turning a model-level flag off clears it on every route',
+    cleared?.pinned === false && (cleared?.routes ?? []).every(route => route.pinned === false),
+    (cleared?.routes ?? []).map(route => `${route.route}:${route.pinned}`).join(','))
+  // Restore the fixture the sections above were built on.
+  await hostCall({ action: 'toggle', route: SECOND_ROUTE, model: target, list: 'pins', on: true })
+
+  // The routes a model is reachable on are chooseable, so a wrapper route stays usable
+  // without being listed as a second model. This is the whole point of merging them:
+  // the capability is not lost, it moves from "another row" to "same row, its routes".
+  dirSnapshot.current = { provider: ROUTE, model: target }
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+  await ensureOpen()
+  await clearSearch()
+  if (pickerDetailOf(target) === null) {
+    const expand = chevronOf(target)
+    if (expand !== null) {
+      await act(async () => {
+        expand.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+        await waitFor(() => pickerDetailOf(target) !== null)
+      })
+    }
+  }
+  const choices = Array.from(pickerDetailOf(target)?.querySelectorAll('.llmm-route-choice') ?? [])
+  check('a model served by two routes offers both, with the current one marked',
+    choices.length === 2 && choices.some(node => node.classList.contains('llmm-route-on')),
+    `${choices.length} choice(s)`)
+  const other = choices.find(node => !node.classList.contains('llmm-route-on'))
+  const beforeRoute = selections.length
+  await act(async () => {
+    other?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => selections.length > beforeRoute)
+  })
+  check('choosing a route keeps the model and moves only the provider',
+    selections[beforeRoute]?.model === target && selections[beforeRoute]?.provider === SECOND_ROUTE,
+    JSON.stringify(selections[beforeRoute] ?? null))
+  dirSnapshot.current = null
+}
+
+// ── the degraded path is model-first too ────────────────────────────────────
+// When the Host cannot answer, the picker falls back to the shipped directory. That
+// is the one path where a wrapper route is likeliest to be in play (a vision twin is
+// registered against a live Host), so it must dedupe by model id exactly like the
+// Host's own view instead of listing the model once per route.
+{
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => { throw new Error('host down') }
+  const holder = {
+    value: {
+      current: null,
+      retainedEffort: undefined,
+      groups: [
+        { id: ROUTE, name: 'A', models: [{ id: at(0) }, { id: at(1) }] },
+        { id: SECOND_ROUTE, name: 'B', models: [{ id: at(0) }] },
+      ],
+    },
+  }
+  const face = {
+    available: true,
+    directory: { subscribe: () => () => {}, getSnapshot: () => holder.value },
+    load: () => {},
+    select: async () => ({ ok: true, value: undefined }),
+  }
+  // Unmount first: `snap` is component state read once on mount, so re-rendering the
+  // same element with new props keeps the snapshot taken before the probe and the row
+  // would still read "not probed".
+  await act(async () => { pickerRoot.render(null) })
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+    })
+  }
+  const names = pickerMenuQueryAll('.llmm-name').map(node => node.textContent)
+  check('a Host that cannot answer still lists each model once',
+    names.filter(name => name === at(0)).length === 1 && names.includes(at(1)),
+    names.join(',') || 'no rows')
+  globalThis.fetch = originalFetch
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+}
+
+// ── a measured level becomes a declared one from the row itself ─────────────
+// The measurement is only useful if it can be acted on: the harness validates a level
+// against the model's DECLARATION, so a model the probe measured but nobody declared
+// could never be switched. The row offers that write, and the click must reach it.
+{
+  const UNDECLARED = at(6)
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => (String(url).includes('/chat/completions')
+    ? syntheticGatewayFetch(url, init)
+    : realFetch(url, init))
+  try {
+    await hostCall({ action: 'probe', route: ROUTE, model: UNDECLARED })
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  const holder = {
+    value: {
+      current: null,
+      retainedEffort: undefined,
+      // No `reasoning` at all: nothing is declared for this model.
+      groups: [{ id: ROUTE, name: ROUTE, models: [{ id: UNDECLARED }] }],
+    },
+  }
+  const face = {
+    available: true,
+    directory: { subscribe: () => () => {}, getSnapshot: () => holder.value },
+    load: () => {},
+    select: async () => ({ ok: true, value: undefined }),
+  }
+  await act(async () => { pickerRoot.render(null) })
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+    })
+  }
+  const rowOf = () => Array.from(pickerMenu()?.querySelectorAll('.llmm-item') ?? [])
+    .find(item => item.querySelector('.llmm-name')?.textContent === UNDECLARED) ?? null
+  const chevron = rowOf()?.querySelector('.llmm-chevron')
+  const detailOf = () => rowOf()?.nextElementSibling?.classList.contains('llmm-detail')
+    ? rowOf().nextElementSibling
+    : null
+  if (detailOf() === null && chevron !== null) {
+    await act(async () => {
+      chevron.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => detailOf() !== null)
+    })
+  }
+  const button = detailOf()?.querySelector('.llmm-inline-act') ?? null
+  check('a model measured but not declared offers to declare the measurement',
+    button !== null, detailOf()?.textContent?.slice(0, 90) ?? 'no detail')
+  const before = settingsWrites.length
+  await act(async () => {
+    button?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => settingsWrites.length > before)
+  })
+  const write = settingsWrites.at(-1)
+  const written = write?.section?.providers?.[ROUTE]?.models?.find(
+    entry => (typeof entry === 'string' ? entry : entry?.id) === UNDECLARED,
+  )
+  check('clicking it declares exactly the levels the gateway accepted',
+    settingsWrites.length === before + 1
+      && Object.keys(written?.reasoningEfforts ?? {}).join(',') === 'low,high,max',
+    JSON.stringify(written ?? null))
+
+  // The same fact from the composer's side: the level segment must be a live
+  // control for a measured-but-undeclared model, and it must lead to the fix —
+  // a dead segment is what made the user ask why they could not switch.
+  await act(async () => { pickerRoot.render(null) })
+  holder.value = {
+    current: { provider: ROUTE, model: UNDECLARED },
+    retainedEffort: undefined,
+    groups: [{ id: ROUTE, name: ROUTE, models: [{ id: UNDECLARED }] }],
+  }
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
+  const segment = () => pickerContainer.querySelector('.llmm-trigger .llmm-effort')
+    ?? pickerContainer.querySelector('.llmm-effort')
+  await waitFor(() => segment() !== null)
+  check('a measured-but-undeclared model keeps the level segment clickable',
+    segment() !== null && segment().getAttribute('aria-haspopup') === 'menu'
+      && segment().getAttribute('aria-disabled') !== 'true',
+    `haspopup=${segment()?.getAttribute('aria-haspopup')} disabled=${segment()?.getAttribute('aria-disabled')}`)
+  const writesBefore = settingsWrites.length
+  await act(async () => {
+    segment().dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => window.document.querySelector('.llmm-effort-menu') !== null)
+  })
+  const menuText = window.document.querySelector('.llmm-effort-menu')?.textContent ?? ''
+  check('its menu explains the gap and offers the write instead of dead levels',
+    /declared|配置|Declare|Write/i.test(menuText), menuText.slice(0, 90) || 'no menu')
+  const declareInMenu = window.document.querySelector('.llmm-effort-declare')
+  await act(async () => {
+    declareInMenu?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => settingsWrites.length > writesBefore)
+  })
+  check('the menu action declares the measured levels',
+    settingsWrites.length === writesBefore + 1, `${settingsWrites.length - writesBefore} write(s)`)
+  await act(async () => { pickerRoot.render(null) })
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+}
+
+// ── the probe's measurement is surfaced, including a declaration it disproves ─
+// A level sweep exists to stop a declaration from being a guess. Its answer has to
+// reach the row, and a declared level the gateway refuses has to be visible as a
+// configuration mistake rather than as a failed turn later.
+{
+  let faceLoads = 0
+  const PROBED = at(2)
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => (String(url).includes('/chat/completions')
+    ? syntheticGatewayFetch(url, init)
+    : realFetch(url, init))
+  try {
+    const probed = await (await hostCall({ action: 'probe', route: ROUTE, model: PROBED })).json()
+  } finally {
+    globalThis.fetch = realFetch
+  }
+  // Declares low (accepted) and medium (refused by the synthetic gateway), so this
+  // covers both the measurement and the mismatch it can expose.
+  const holder = {
+    value: {
+      current: null,
+      retainedEffort: undefined,
+      groups: [{
+        id: ROUTE,
+        name: ROUTE,
+        models: [{ id: PROBED, reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'medium', name: 'Medium' }] } }],
+      }],
+    },
+  }
+  const face = {
+    available: true,
+    directory: { subscribe: () => () => {}, getSnapshot: () => holder.value },
+    load: () => { faceLoads += 1 },
+    select: async () => ({ ok: true, value: undefined }),
+  }
+  // Unmount first: `snap` is component state read once on mount, so re-rendering the
+  // same element with new props keeps the snapshot taken before the probe and the
+  // row would still read "not probed".
+  await act(async () => { pickerRoot.render(null) })
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+    })
+  }
+  if (pickerDetailOf(PROBED) === null) {
+    const chevron = pickerRowFor(PROBED)?.querySelector('.llmm-chevron')
+    if (chevron) {
+      await act(async () => {
+        chevron.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+        await waitFor(() => pickerDetailOf(PROBED) !== null)
+      })
+    }
+  }
+  const detail = pickerDetailOf(PROBED)
+  const detailText = detail?.textContent ?? ''
+  check('the detail reports the levels the gateway actually accepted',
+    /low/.test(detailText) && /high/.test(detailText) && /max/.test(detailText), detailText.slice(0, 120))
+  const warn = detail?.querySelector('.llmm-detail-line-warn')?.textContent ?? ''
+  check('a declared level the gateway refused is flagged, not silently offered',
+    /medium/.test(warn), warn || 'no warning field')
+  // The probe declares what it measured, and a declaration changes the catalog —
+  // which the snapshot does not carry — so the picker must reload the directory
+  // in the same gesture, or the level segment stays unswitchable until remount.
+  check('the picker reloads the directory after an auto-declaring probe',
+    faceLoads > 0, `${faceLoads} reload(s)`)
+  await act(async () => { pickerRoot.render(null) })
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+}
+
+// ── the level segment: capability on the trigger, not a second menu ─────────
+// The composer already names the model, so the level lives beside it: reachable
+// without opening the list, and printed even where it cannot be changed. An
+// omitted level is NOT "no thinking" — measured on this gateway, omitting the
+// field was identical to `max` — so a hidden row would read as "off".
+{
+  const ADJUSTABLE = at(0)
+  const PLAIN = at(1)
+  const EFFORTS = [
+    { id: 'low', name: 'Low' },
+    { id: 'high', name: 'High' },
+    { id: 'max', name: 'Max' },
+  ]
+  // A NEW snapshot object per mount, not a mutated field: the picker's derived
+  // values are memoised on the snapshot's identity, so mutating in place leaves
+  // the reasoning index holding the previous (empty) catalog and every level
+  // assertion below reads the stale answer.
+  const holder = { value: { current: null, groups: [], retainedEffort: undefined } }
+  const face = {
+    available: true,
+    directory: { subscribe: () => () => {}, getSnapshot: () => holder.value },
+    load: () => {},
+    select: async (selection) => { selections.push(selection); return { ok: true, value: undefined } },
+  }
+  const rerender = async (current) => {
+    holder.value = {
+      current,
+      retainedEffort: undefined,
+      groups: [{
+        id: ROUTE,
+        name: ROUTE,
+        models: MODELS.map(model => ({
+          id: model,
+          name: model,
+          reasoning: model === ADJUSTABLE ? { efforts: EFFORTS, defaultEffort: 'high' } : undefined,
+        })),
+      }],
+    }
+    await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
+  }
+  const segment = () => pickerContainer.querySelector('.llmm-effort')
+  const levelMenu = () => window.document.body.querySelector('.llmm-effort-menu')
+  const items = () => Array.from(levelMenu()?.querySelectorAll('.llmm-effort-item') ?? [])
+  const click = async (node) => {
+    await act(async () => { node.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  }
+
+  await rerender({ provider: ROUTE, model: ADJUSTABLE })
+  check('the trigger names the level in force, taken from the model own default',
+    segment() !== null && /High/.test(segment().textContent ?? ''), segment()?.textContent ?? 'no segment')
+  check('an adjustable model makes the level segment a control',
+    segment() !== null && !segment().classList.contains('llmm-effort-static'), segment()?.className ?? '')
+
+  // The list may already be open from an earlier block, and the trigger toggles:
+  // clicking unconditionally would close it, and `waitFor` resolves false on
+  // timeout rather than throwing, so the assertions below would then read an empty
+  // surface instead of failing here.
+  if (pickerMenu() === null) await click(pickerContainer.querySelector('.llmm-trigger'))
+  const openForChips = await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+  check('the model list is open for the chip assertion', openForChips === true)
+  // The search box keeps whatever an earlier block typed into it, and the picker
+  // keeps one query for its lifetime. Read the unfiltered list, or this asserts
+  // against one matched row.
+  await act(async () => {
+    const input = pickerMenuQuery('.llmm-input')
+    if (input !== null) {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, '')
+      input.dispatchEvent(new window.Event('input', { bubbles: true }))
+    }
+    await waitFor(() => pickerMenuQueryAll('.llmm-item').length > 1)
+  })
+  check('only the adjustable row carries a level chip',
+    pickerMenuQueryAll('.llmm-chip-effort').length === 1,
+    `${pickerMenuQueryAll('.llmm-chip-effort').length} chip(s)`)
+
+  await click(segment())
+  await waitFor(() => levelMenu() !== null)
+  check('opening the level menu closes the model list', pickerMenu() === null, 'both surfaces are open')
+  const offered = items().map(node => node.textContent.replace('✓', '').trim())
+  check('the level menu offers exactly the levels the model declared',
+    offered.join(',') === 'Low,High,Max', offered.join(',') || 'empty')
+  check('no default row is offered when the model names its own default',
+    !offered.some(label => /Default|默认/.test(label)), offered.join(','))
+
+  const before = selections.length
+  await click(items().find(node => /Max/.test(node.textContent)))
+  await waitFor(() => levelMenu() === null)
+  const chosen = selections.slice(before)
+  check('choosing a level re-selects the same model with that level',
+    chosen.length === 1 && chosen[0].provider === ROUTE && chosen[0].model === ADJUSTABLE
+      && chosen[0].reasoningEffort === 'max',
+    JSON.stringify(chosen))
+
+  // The shipped directory spells the retained level as a NAME ("High"), and passing it
+  // to select() makes resolveCallConfig reject the selection — the exact failure the
+  // user hit as `does not support reasoning effort "High"`. Re-picking the same model
+  // must send the ID.
+  holder.value = {
+    ...holder.value,
+    retainedEffort: 'High',
+    current: { provider: ROUTE, model: ADJUSTABLE, reasoningEffort: 'high' },
+  }
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+    })
+  }
+  const sameRow = Array.from(pickerMenuQueryAll('.llmm-item'))
+    .find(item => item.querySelector('.llmm-name')?.textContent === ADJUSTABLE)
+  const beforeRepick = selections.length
+  await act(async () => {
+    sameRow?.querySelector('.llmm-item-select')
+      .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => selections.length > beforeRepick)
+  })
+  check('re-picking a used model sends the level ID, not its display name',
+    selections[beforeRepick]?.reasoningEffort === 'high',
+    JSON.stringify(selections[beforeRepick] ?? null))
+
+  await rerender({ provider: ROUTE, model: PLAIN })
+  const plainLabel = (segment()?.textContent ?? '').replace('·', '').trim()
+  check('a model that declares nothing shows the default instead of hiding the row',
+    /^(Default|默认)$/.test(plainLabel), segment()?.textContent ?? 'no segment')
+  check('a model that declares nothing is not a control',
+    segment() !== null && segment().classList.contains('llmm-effort-static'), segment()?.className ?? '')
+  await click(segment())
+  await new Promise(resolve => setTimeout(resolve, 30))
+  check('clicking a non-adjustable level segment opens nothing', levelMenu() === null)
+}
+
 await act(async () => { pickerRoot.unmount() })
 
 // ── deleting the counters ───────────────────────────────────────────────────
@@ -1436,6 +1976,78 @@ const snapAfterClear = await (await hostCall({ action: 'snapshot' })).json()
 check('a cleared counter reads as never used, not as a stale number',
   (snapAfterClear?.value?.groups ?? []).flatMap(g => g.rows).every(row => (row.usage?.uses ?? 0) === 0),
   'a row still reports uses after the counters were cleared')
+
+// ── selector.mode is the only way back to the shipped picker ────────────────
+// The picker is registered by the CLIENT half, and the client runtime hands a
+// plugin only its module URL — `__DSH_BOOT__` entries are { id, url, rev }, with
+// no Loader row config — so the mode cannot arrive as `apply`'s second argument.
+// It is asked of the Host instead, and a `native` answer releases the seat. These
+// mounts pin the whole contract, including that a Host that cannot answer leaves
+// the picker alone rather than silently deleting a control.
+{
+  const originalFetch = globalThis.fetch
+  /**
+   * Mount the client half against a Host that answers `selectorMode` with `answer`.
+   * @param {string|Error} answer - the mode to report, or a thrown failure.
+   * @returns {Promise<string[]>} ids still occupying a seat once the answer landed.
+   */
+  const mount = async (answer) => {
+    const live = new Set()
+    globalThis.fetch = async () => {
+      if (answer instanceof Error) throw answer
+      return { ok: true, status: 200, json: async () => ({ ok: true, value: { selectorMode: answer } }) }
+    }
+    captured.apply({
+      slots: {
+        inject: (_key, callback) => {
+          const release = callback()
+          return () => { if (typeof release === 'function') release() }
+        },
+        register: (options) => { live.add(options.id ?? options.name); return () => { live.delete(options.id ?? options.name) } },
+      },
+    })
+    // The answer is a real request, so the release lands a tick later.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    return [...live]
+  }
+  const managed = await mount('managed')
+  check('the managed mode keeps the picker', managed.includes('llm-manage-picker'), managed.join(',') || 'nothing registered')
+  const native = await mount('native')
+  check('selector.mode = native releases the picker', !native.includes('llm-manage-picker'), native.join(',') || 'nothing registered')
+  check('releasing the picker keeps the management panel', native.includes('llm-manage-panel'), native.join(',') || 'nothing registered')
+  const unreachable = await mount(new Error('host down'))
+  check('an unreachable Host does not delete the picker', unreachable.includes('llm-manage-picker'), unreachable.join(',') || 'nothing registered')
+
+  // A Host that predates the cheap action still answers the snapshot, and the
+  // browser always loads the newer client half — so the fallback is the difference
+  // between `native` working on an un-restarted Host and looking inert.
+  {
+    const live = new Set()
+    const asked = []
+    globalThis.fetch = async (_url, init) => {
+      const action = JSON.parse(init.body).action
+      asked.push(action)
+      if (action === 'selectorMode') {
+        return { ok: true, status: 400, json: async () => ({ ok: false, message: 'unknown action' }) }
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true, value: { selectorMode: 'native' } }) }
+    }
+    captured.apply({
+      slots: {
+        inject: (_key, callback) => {
+          const release = callback()
+          return () => { if (typeof release === 'function') release() }
+        },
+        register: (options) => { live.add(options.id ?? options.name); return () => { live.delete(options.id ?? options.name) } },
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    check('a Host without the cheap action still honours native through the snapshot',
+      !live.has('llm-manage-picker'), [...live].join(',') || 'nothing registered')
+    check('the fallback asks the cheap action first', asked[0] === 'selectorMode', asked.join(' → '))
+  }
+  globalThis.fetch = originalFetch
+}
 
 await act(async () => { root.unmount() })
 rmSync(HOME, { recursive: true, force: true })
