@@ -25,3 +25,7 @@ yarn.lock
 .idea/
 .vscode/
 *.swp
+
+# `npm pack` output. The artifact is reproduced from the tree by the release
+# commands, so a checked-in tarball would only ever be a stale copy of it.
+*.tgz
