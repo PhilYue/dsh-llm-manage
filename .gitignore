@@ -12,6 +12,11 @@ docs/picker-*.png
 docs/*
 !docs/panel.png
 !docs/picker.png
+# The upstream-parity ledger and its notes ARE committed: they document what this plugin
+# took over from the shipped picker, and the checker in tools/ reads the ledger. They are
+# text, they name no route and no maintainer.
+!docs/upstream-parity.json
+!docs/upstream-parity.md
 
 # Dependencies, if this package is ever developed in place.
 node_modules/

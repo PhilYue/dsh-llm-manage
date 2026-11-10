@@ -22,6 +22,7 @@
  * Exits non-zero on the first failed expectation. This is a development
  * artifact; it is not part of the installed runtime surface.
  */
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -141,16 +142,24 @@ const hostGet = (k) => {
   if (k === 'agentDefaultModel') return agentDefaultModel
   return undefined
 }
+// What the catalog currently OFFERS for a model. Mutable because the declaration gate
+// is defined in terms of it: a model the platform already covers must not be written
+// to, and the only way to prove that is to make the platform's answer move.
+let effectiveEfforts = ['low', 'high']
 const llmService = {
   listProviders: () => [{ id: ROUTE, name: DISPLAY_NAME }, { id: MIRROR_ROUTE, name: MIRROR_ROUTE }],
   // settingsPath is the directory's own path from the section root to this
   // provider's profile; llm-pi-ai declares ['providers', provider].
   listConfigurableProviders: () => [{ provider: ROUTE, displayName: DISPLAY_NAME, settingsNs: SETTINGS_NS, settingsPath: ['providers', ROUTE] }],
   listModels: async (id) => (id === MIRROR_ROUTE ? MIRRORED : MODELS).map(model => ({ id: model, name: model })),
-  // The repair path reads the model's own declaration to choose a valid level.
+  // The declaration gate reads the model's EFFECTIVE levels: what the catalog and its
+  // declaration together offer right now.
   resolveModelInfo: async (provider, model) => ({
     provider, id: model, name: model,
-    reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'high' },
+    reasoning: {
+      efforts: effectiveEfforts.map(id => ({ id, name: id })),
+      defaultEffort: 'high',
+    },
   }),
 }
 
@@ -225,8 +234,10 @@ plugin.apply(ctx, undefined)
 // ── the real Tool registry contract ─────────────────────────────────────────
 const def = registered.find(d => d.name === 'llm_models')
 check('apply() registers the llm_models tool', def !== undefined)
-check('agent/request and agent/request-error listeners mounted',
-  (listeners['agent/request'] ?? []).length >= 1 && (listeners['agent/request-error'] ?? []).length === 1)
+check('the request, request-error and claim listeners are mounted',
+  (listeners['agent/request'] ?? []).length >= 1
+    && (listeners['agent/request-error'] ?? []).length === 1
+    && (listeners['agent/inbox/claimed'] ?? []).length === 1)
 check('HTTP route mounted', routes.some(r => r.path === '/api/llm-manage'))
 
 // ToolRuntime.register throws a TypeError unless `output.render` is a function,
@@ -366,8 +377,15 @@ const CASES = [
 for (const [index, c] of CASES.entries()) {
   const caseAgent = AGENT_FOR(index + 1)
   await observe(caseAgent, c.model)
+  const before = sessionCalls.length
   const action = await fireError(caseAgent, { message: c.message, code: c.code, status: c.status })
-  check(c.label, (action?.kind === 'retry') === c.retry, `retry=${action?.kind === 'retry'}`)
+  const moved = sessionCalls.slice(before)
+  // 0.2.2 froze the step's selection and a retry replays it, so a switch can only be
+  // a Session move for the NEXT message. Asking for a retry here re-sent the model
+  // that had just failed and then died on the request-time mismatch check.
+  const switched = moved.length === 1 && moved[0].model !== c.model
+  check(c.label, switched === c.retry && action === undefined,
+    `moved=${moved.map(m => m.model).join(',') || 'none'} action=${action?.kind ?? 'none'}`)
 }
 
 
@@ -720,6 +738,39 @@ check('a switch the answering model confirms is reported as reached',
   `outcome=${reached?.outcome} to=${reached?.to?.model ?? 'null'} asked=${target.model}`)
 check('an unrelated session gets no banner', (await call({ action: 'fallbackLog', sessionId: 'sess-never-used' })).body?.value === null)
 
+// ── the switch history outlives the session that produced it ────────────────
+// The banner answers "what happened in this turn" and is gone at the next reload.
+// "Which model keeps costing me a retry" is a question about the profile, and it
+// can only be answered by records that survive the page — that is the whole point
+// of a second document rather than a longer in-memory list.
+{
+  // The history is written from the event handler, which cannot be awaited by the
+  // emitter — the harness dispatches the event and moves on. Waiting here is the
+  // honest form of "the write had a chance to land", not a way to hide a missing one.
+  await new Promise(resolve => setTimeout(resolve, 120))
+  const history = (await call({ action: 'failoverHistory' })).body?.value
+  const records = history?.records ?? []
+  check('every proven switch is appended to a history that outlives the session',
+    records.length >= 3 && records.some(record => record.outcome === 'reached'),
+    `${records.length} record(s)`)
+  check('a history record names both ends of the switch',
+    records.every(record => record.from?.model !== undefined && record.to?.model !== undefined),
+    JSON.stringify(records[0] ?? null).slice(0, 120))
+  const culprit = (history?.models ?? []).find(entry => entry.model === at(2))
+  check('the history counts the model that kept failing',
+    culprit?.switches >= 3 && culprit.reached >= 1 && culprit.unreached >= 1 && culprit.sessions >= 3,
+    JSON.stringify(culprit ?? null))
+  check('the history ranks the worst offender first',
+    (history?.models ?? [])[0]?.model === at(2),
+    (history?.models ?? []).map(entry => `${entry.model}:${entry.switches}`).join(' '))
+  // Statistics that cannot be reset would only ever describe a machine that no
+  // longer exists, which is why clearing is part of the action rather than a file edit.
+  await call({ action: 'clearFailover' })
+  const emptied = (await call({ action: 'failoverHistory' })).body?.value
+  check('the switch history can be cleared',
+    Array.isArray(emptied?.records) && emptied.records.length === 0, `${emptied?.records?.length ?? 'null'} left`)
+}
+
 // ── a provider-level fault must not blacklist the model ─────────────────────
 // "No adapter registered for provider" says nothing about any model on the route:
 // every model there would fail the same way. Recording it against the selected
@@ -732,10 +783,14 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
   const healthOf = async () => (await call({ action: 'snapshot' })).body?.value?.groups
     ?.flatMap(g => g.rows).find(r => r.model === at(1))?.status
   const before = await healthOf()
+  const beforeMoves = sessionCalls.length
   const action = await fireError(providerAgent, {
     code: 'NO_ADAPTER', status: 400, message: 'no adapter registered for provider "example-route"',
   })
-  check('a route with no adapter is still switchable', action?.kind === 'retry', `action=${action?.kind ?? 'none'}`)
+  const providerMoves = sessionCalls.slice(beforeMoves)
+  check('a route with no adapter still moves the Session',
+    providerMoves.length === 1 && action === undefined,
+    `moves=${providerMoves.map(m => m.model).join(',') || 'none'} action=${action?.kind ?? 'none'}`)
   // The assertion has to be "the record did not change", not "it is not error":
   // the fault now carries its own reason, so a status comparison against one
   // value passes whether or not the model was written to. What matters is that a
@@ -766,23 +821,27 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
     restored.map(d => `${d.provider}/${d.model}`).join(',') || 'default never restored')
 }
 
-// ── the override cannot leak into a later request ───────────────────────────
-// It is set for one exact turn and step. Matching on the session alone meant an
-// override whose retry never happened stayed live for its whole TTL and was then
-// consumed by whatever request came next.
+// ── a repair may move the Session, never the frozen request ──────────────────
+// `agent/request` is deprecated precisely for this: a replacement "must keep the
+// provider, model, and reasoning effort selection", and the loop throws
+// `agent/request proposed … after step preparation fixed …` when it does not. The
+// old recovery rewrote the model there, which is why a quota error surfaced as an
+// UNKNOWN turn failure instead of a switch.
 {
   const leakAgent = AGENT_FOR(34)
   await observe(leakAgent, at(2))
   await fireError(leakAgent, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
-  const nextTurn = await observeAndRead(leakAgent, at(2), 2)
-  check('an override set for one turn does not move a later turn',
-    nextTurn === at(2), `later turn resolved to ${nextTurn}`)
+  const sameStep = await observeAndRead(leakAgent, at(2), 1)
+  check('a repair does not rewrite the frozen request',
+    sameStep === at(2), `request asked for ${sameStep}`)
 }
 
 // ── a level the model does not declare is repaired, not switched away from ──
 // This is the failure the user hit as `does not support reasoning effort "High"`: a
 // stale selection, not a sick model. Switching models would hide it, and recording it
-// against the model would blacklist one that works.
+// against the model would blacklist one that works. The repair is a CLEAR now that the
+// harness gives "no explicit level" its own meaning: the request falls back to the
+// adapter default, which the harness has validated against the declaration.
 {
   const target = AGENT_FOR(41)
   const requestDecision = async (agent, turn) => {
@@ -799,15 +858,17 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
     status: 400,
     message: `provider "${ROUTE}" model "${at(0)}" does not support reasoning effort "High"`,
   })
-  check('an unsupported level asks for a retry instead of a model switch',
-    healed?.kind === 'retry', JSON.stringify(healed))
+  check('an unsupported level repairs the Session instead of asking for a retry',
+    healed === undefined, JSON.stringify(healed ?? null))
 
+  // The request still carries whatever the step froze — rewriting it is what the
+  // loop rejects — so what has to be true is that the repair reaches the SELECTION.
   const decision = await requestDecision(target, 1)
-  check('the retry asks for a level the model declares, not the rejected one',
-    decision.reasoningEffort === 'high' && decision.model === at(0), JSON.stringify(decision))
+  check('the repair leaves the frozen request alone',
+    decision.reasoningEffort === 'High' && decision.model === at(0), JSON.stringify(decision))
   const sessionCall = sessionCalls.at(-1)
-  check('the Session is moved to the repaired level, not just the retried request',
-    sessionCall?.model === at(0) && sessionCall?.reasoningEffort === 'high',
+  check('the Session is moved to the cleared level',
+    sessionCall?.model === at(0) && sessionCall?.reasoningEffort === undefined,
     JSON.stringify(sessionCall ?? null))
   const modelHealth = (await call({ action: 'snapshot' })).body?.value?.groups
     ?.flatMap(group => group.rows).find(row => row.model === at(0))?.status
@@ -815,13 +876,65 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
     modelHealth !== 'error', `model health=${modelHealth ?? 'none'}`)
 
   // The same failure twice in one turn must not loop: the second pass declines.
+  const beforeRepeat = sessionCalls.length
   const repeated = await fireError(target, {
     code: 'UNSUPPORTED_REASONING_EFFORT',
     status: 400,
     message: 'does not support reasoning effort "High"',
   })
   check('a repeated level failure in the same turn does not loop',
-    repeated?.kind !== 'retry', JSON.stringify(repeated ?? null))
+    repeated === undefined && sessionCalls.length === beforeRepeat,
+    `${JSON.stringify(repeated ?? null)} moves=${sessionCalls.length - beforeRepeat}`)
+}
+
+// ── the repair is finished at claim time when the Session did not adopt it ───
+// `agent/inbox/claimed` fires synchronously inside step preparation, after the
+// message is claimed and BEFORE the step reads `model.current()` — the last moment a
+// selection change still applies to the step about to run. A controller call can be
+// refused; without this the step would start on the selection we already know is bad.
+{
+  /** Dispatch one claim to the plugin and report the selections it made. */
+  function claimWith(agent) {
+    const selects = []
+    const claimed = {
+      ...agent,
+      model: {
+        current: () => agent.selection,
+        select: (selection) => { selects.push(selection) },
+      },
+    }
+    for (const l of listeners['agent/inbox/claimed'] ?? []) l.call({}, { agent: claimed, message: {}, turn: 9 })
+    return selects
+  }
+
+  // A switch the Session kept: the claim finishes it with the chain head.
+  const switchAgent = AGENT_FOR(42)
+  await observe(switchAgent, at(2))
+  await fireError(switchAgent, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  const finished = claimWith({ ...switchAgent, selection: { provider: ROUTE, model: at(2) } })
+  check('a switch the Session kept is finished at claim time',
+    finished.length === 1 && finished[0].model !== at(2), JSON.stringify(finished))
+
+  // A model someone else already picked is never overruled.
+  const spokeAgent = AGENT_FOR(43)
+  await observe(spokeAgent, at(2))
+  await fireError(spokeAgent, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  const untouched = claimWith({ ...spokeAgent, selection: { provider: ROUTE, model: at(0) } })
+  check('a claim never overrules a selection that is no longer the broken one',
+    untouched.length === 0, JSON.stringify(untouched))
+
+  // A level the Session kept: the claim clears it, which is the whole repair.
+  const levelAgent = AGENT_FOR(44)
+  await observe(levelAgent, at(0))
+  await fireError(levelAgent, {
+    code: 'UNSUPPORTED_REASONING_EFFORT',
+    status: 400,
+    message: `provider "${ROUTE}" model "${at(0)}" does not support reasoning effort "High"`,
+  })
+  const cleared = claimWith({ ...levelAgent, selection: { provider: ROUTE, model: at(0), reasoningEffort: 'High' } })
+  check('a level the Session kept is cleared at claim time',
+    cleared.length === 1 && cleared[0].reasoningEffort === undefined,
+    JSON.stringify(cleared))
 }
 
 // ── a probe measures the levels, not just the health ───────────────────────
@@ -897,6 +1010,198 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
     JSON.stringify(refused.body ?? null))
 }
 
+// ── a declaration is merged into what the model already declares ────────────
+// pi-ai reads a declaration as CLOSED: a level the dict does not name is pinned to
+// null — "this model does not support it". Replacing the dict wholesale therefore
+// deletes facts this plugin never measured: the official Off level, a wire spelling
+// that is not the level id, another editor's rows. Only missing levels are added.
+{
+  const target = at(2)                    // measured low,high,max by the probe above
+  const saved = settingsValue
+  const seeded = structuredClone(saved)
+  const models = seeded.providers?.[ROUTE]?.models
+  const index = models.findIndex(entry => (typeof entry === 'string' ? entry : entry?.id) === target)
+  const existing = index === -1 ? undefined : models[index]
+  const declared = { off: null, high: 'High', medium: 'medium' }
+  models[index === -1 ? models.length : index] = {
+    ...(typeof existing === 'string' ? { id: existing, name: existing } : existing ?? { id: target, name: target }),
+    reasoningEfforts: declared,
+  }
+  // A hand-edited config, written the way a profile would carry it — not through the
+  // settings service, which is the path under test.
+  settingsValue = seeded
+  const before = settingsWrites.length
+  const merged = await call({ action: 'declareLevels', route: ROUTE, model: target })
+  const write = settingsWrites.length === before ? undefined : settingsWrites.at(-1)
+  const written = write?.section?.providers?.[ROUTE]?.models?.find(
+    entry => (typeof entry === 'string' ? entry : entry?.id) === target,
+  )?.reasoningEfforts
+  check('a declaration adds the missing levels instead of replacing the dict',
+    merged.body?.ok === true
+      && Object.keys(written ?? {}).join(',') === 'off,high,medium,low,max',
+    JSON.stringify(written ?? merged.body ?? null))
+  check('the declaration leaves the keys it did not measure untouched',
+    written?.off === null && written?.high === 'High' && written?.medium === 'medium'
+      && written?.low === 'low' && written?.max === 'max',
+    JSON.stringify(written ?? null))
+  settingsValue = saved
+}
+
+// ── a model the platform already covers is not written to ───────────────────
+// The probe declares automatically, which is only safe while it cannot overwrite a
+// still-wider declaration the platform already produces. The gate is the model's
+// EFFECTIVE levels, and it has to hold for the manual path too.
+{
+  const target = at(2)
+  // Strip the model's own entry first: without it the merge path would REFUSE (there is
+  // nowhere to write), so an `ok` answer here can only come from the gate answering
+  // before the settings are ever read.
+  const saved = settingsValue
+  const stripped = structuredClone(saved)
+  stripped.providers[ROUTE].models = stripped.providers[ROUTE].models.filter(
+    entry => (typeof entry === 'string' ? entry : entry?.id) !== target,
+  )
+  settingsValue = stripped
+  effectiveEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const before = settingsWrites.length
+  const again = await call({ action: 'declareLevels', route: ROUTE, model: target })
+  const value = again.body?.value
+  check('a declaration is skipped when the model already offers every measured level',
+    again.body?.ok === true && value?.already === true && settingsWrites.length === before,
+    `${JSON.stringify(value ?? again.body ?? null)} writes=${settingsWrites.length - before}`)
+  settingsValue = saved
+
+  // …and the automatic declaration that rides on a probe obeys the same gate: put the
+  // fetched order back, because the synthetic gateway is only fetched by the probe.
+  const probeTarget = at(3)
+  const realFetch = globalThis.fetch
+  globalThis.fetch = syntheticGatewayFetch
+  let probed
+  try {
+    probed = await call({ action: 'probe', route: ROUTE, model: probeTarget })
+  } finally {
+    globalThis.fetch = realFetch
+    effectiveEfforts = ['low', 'high']
+  }
+  check('a probe does not rewrite a declaration the model already satisfies',
+    probed.body?.value?.declared?.already === true && settingsWrites.length === before,
+    `${JSON.stringify(probed.body?.value?.declared ?? null)} writes=${settingsWrites.length - before}`)
+}
+
+// ── the level list is the platform's, not our memory of it ──────────────────
+// The probe sweeps a literal list. If the platform's gate gains a level, a stale copy
+// would silently stop measuring it — the failure is invisible, so it is pinned here.
+{
+  const ourSource = readFileSync(join(HERE, 'index.js'), 'utf8')
+  const ourLiteral = ourSource.match(/const REASONING_LEVELS = (\[[^\]]*\])/)?.[1] ?? '[]'
+  const ours = JSON.parse(ourLiteral.replace(/'/g, '"'))
+  const checkout = process.env.DSH_CHECKOUT ?? join(HERE, '..', '..', '..', 'deepseek-harness')
+  const catalog = readFileSync(join(checkout, 'packages/llm/llm-pi-ai/src/catalog.ts'), 'utf8')
+  const gateStart = catalog.indexOf('const THINKING_LEVEL_GATE')
+  const gateBody = gateStart === -1 ? '' : catalog.slice(gateStart, catalog.indexOf('}', gateStart))
+  const theirs = [...gateBody.matchAll(/^\s*([a-z]+): true,/gm)].map(match => match[1])
+  check('the measured levels mirror the platform thinking-level gate',
+    theirs.length > 0 && ours.join(',') === theirs.join(','),
+    `${ours.join(',') || 'none'} vs ${theirs.join(',') || 'none'}`)
+  const derived = /REASONING_PROBE_LEVELS = REASONING_LEVELS\.filter\(level => level !== 'off'\)/.test(ourSource)
+  check('the probe sweeps that gate minus off', derived,
+    derived ? 'derived from the gate' : 'a hard-coded copy')
+}
+
+// ── the marks the shipped picker's label needs, in one cheap answer ─────────
+// The label renders for every picker row before anything is expanded, so the answer
+// has to come from the overlay alone — a directory read per row would be a stampede.
+{
+  const badges = await call({ action: 'badges' })
+  const rows = badges.body?.value
+  check('the badges action answers one row per catalog model',
+    Array.isArray(rows) && rows.length > 0
+      && rows.every(row => typeof row.route === 'string' && typeof row.model === 'string'
+        && typeof row.status === 'string'),
+    Array.isArray(rows) ? `${rows.length} row(s)` : JSON.stringify(badges.body ?? null))
+  const graded = (rows ?? []).filter(row => typeof row.level === 'number' && row.level >= 1)
+  check('a badge carries the level and the use count, not just health',
+    graded.length > 0 && typeof graded[0].uses === 'number',
+    JSON.stringify(graded[0] ?? null))
+  check('the badges answer does not drag a snapshot with it',
+    badges.body?.snapshot === undefined, Object.keys(badges.body ?? {}).join(','))
+}
+
+// ── the policy and the log the manager dialog edits ─────────────────────────
+// The dialog owns two things the Loader row cannot: the fallback order the user
+// arranges, and the record of what each probe actually saw. Both are stored in
+// the plugin's own documents, so the answers below also prove the normalizer
+// carries them through a read-modify-write instead of erasing them.
+{
+  const initial = await call({ action: 'fallbackConfig' })
+  check('the fallback policy is readable before anything is saved',
+    initial.body?.ok === true
+      && typeof initial.body.value?.enabled === 'boolean'
+      && Array.isArray(initial.body.value?.chain),
+    JSON.stringify(initial.body?.value ?? null))
+
+  const bad = await call({ action: 'setFallback', chain: ['not-a-pair'] })
+  check('a chain entry that is not a route/model pair is refused',
+    bad.status === 400 && /not a route\/model pair/.test(bad.body?.message ?? ''),
+    `${bad.status} ${bad.body?.message ?? ''}`)
+
+  const saved = await call({
+    action: 'setFallback',
+    enabled: false,
+    chain: [`${ROUTE}/${at(3)}`, `${ROUTE}/${at(3)}`, `${ROUTE}/${at(4)}`],
+  })
+  check('a saved policy drops duplicates and keeps the order',
+    JSON.stringify(saved.body?.value?.chain) === JSON.stringify([`${ROUTE}/${at(3)}`, `${ROUTE}/${at(4)}`]),
+    JSON.stringify(saved.body?.value ?? null))
+  check('a saved policy flips the switch the snapshot reports',
+    saved.body?.snapshot?.fallbackEnabled === false,
+    String(saved.body?.snapshot?.fallbackEnabled))
+
+  const restored = await call({ action: 'setFallback', enabled: true, chain: [] })
+  check('the policy can be put back',
+    restored.body?.value?.enabled === true && (restored.body?.value?.chain ?? []).length === 0,
+    JSON.stringify(restored.body?.value ?? null))
+}
+
+// The probe log answers "what happened", which the per-model health record cannot.
+{
+  const realFetch = globalThis.fetch
+  globalThis.fetch = syntheticGatewayFetch
+  let probe
+  try {
+    probe = await call({ action: 'probe', route: ROUTE, model: at(2) })
+  } finally { globalThis.fetch = realFetch }
+  const log = await call({ action: 'probeRecords' })
+  const records = log.body?.value?.records ?? []
+  check('a probe leaves a record behind',
+    records.length > 0
+      && records[0].model === at(2)
+      && records[0].status === probe.body?.value?.reason
+      && Array.isArray(records[0].levels) && records[0].levels.length > 0,
+    JSON.stringify(records[0] ?? null))
+  check('the probe log is newest first',
+    records.every((row, index) => index === 0 || records[index - 1].at >= row.at),
+    records.slice(0, 3).map(row => row.at).join(','))
+}
+
+// Proficiency is derived from the ledger, but the user may know better. A manual
+// level must win without erasing the counters, which is what `manual` reports.
+{
+  const target = at(1)
+  const usageOf = snapshot => (snapshot?.models ?? []).find(model => model.model === target)?.usage
+  const set = await call({ action: 'setLevel', model: target, level: 6 })
+  check('a manual level is stored and reported',
+    usageOf(set.body?.snapshot)?.level === 6 && usageOf(set.body?.snapshot)?.manual === true,
+    JSON.stringify(usageOf(set.body?.snapshot) ?? null))
+  const cleared = await call({ action: 'setLevel', model: target, level: null })
+  check('clearing the manual level returns to the derived one',
+    usageOf(cleared.body?.snapshot)?.manual === false,
+    JSON.stringify(usageOf(cleared.body?.snapshot) ?? null))
+  const refused = await call({ action: 'setLevel', model: target, level: 9 })
+  check('a level outside the ladder is refused', refused.status === 400,
+    `${refused.status} ${refused.body?.message ?? ''}`)
+}
+
 // ── the mode the client half has to ask for ─────────────────────────────────
 // The client runtime gives a plugin no Loader row config, so the picker's mode can
 // only arrive from here. A missing or misnamed action would leave the client
@@ -904,6 +1209,10 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
 {
   const response = await call({ action: 'selectorMode' })
   const value = response.body?.value
+  // One model entry, ours: the picker in the composer carries the shipped capabilities
+  // plus levels, probes and the manager, so it owns the seat unless the row asks for
+  // `native`. Two entries (the shipped picker and a rail beside it) is the state the
+  // user rejected as "太怪异".
   check('the selectorMode action reports the configured mode',
     value?.selectorMode === 'managed', `got ${JSON.stringify(value ?? response.body)}`)
   // One enum is the whole point: it must not drag a model listing along with it.
@@ -978,6 +1287,61 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
     flipped?.usage.uses === acrossRoutes && acrossRoutes > (flipped?.routes ?? []).reduce(
       (best, route) => Math.max(best, route.usage.uses), 0),
     `model ${flipped?.usage.uses} vs routes ${acrossRoutes}`)
+}
+
+// ── taking a model out of the catalogue ─────────────────────────────────────
+// A gateway retires models, and a list that can only ever grow stops describing
+// what is available. The removal is a local decision (the plugin cannot
+// unregister a model upstream), so it must be reversible and must not leave the
+// model reachable through the one path that would contradict the list: routing.
+{
+  const doomed = at(4)
+  const before = (await call({ action: 'snapshot' })).body?.value
+  const listedBefore = (before?.models ?? []).some(entry => entry.model === doomed)
+  const removal = await call({ action: 'removeModel', route: ROUTE, model: doomed })
+  const after = removal.body?.value
+  check('removing a model takes it out of the catalogue view',
+    listedBefore && after !== undefined && !(after.models ?? []).some(entry => entry.model === doomed),
+    `${(after?.models ?? []).map(entry => entry.model).join(',')}`)
+  check('a removed model is listed separately so it can be restored',
+    (after?.removed ?? []).some(entry => entry.model === doomed && entry.listed === true),
+    JSON.stringify(after?.removed ?? null))
+
+  // The chain names the removed model first. If removal only filtered the view,
+  // the very next failure would route into a model the user had just taken away.
+  await call({ action: 'setFallback', enabled: true, chain: [`${ROUTE}/${doomed}`] })
+  const survivor = AGENT_FOR(70)
+  await observe(survivor, at(0))
+  const beforeMove = sessionCalls.length
+  await fireError(survivor, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  const landedOn = sessionCalls.slice(beforeMove).map(entry => entry.model).join(',')
+  check('a removed model is never chosen as a fallback target', landedOn !== doomed,
+    `landed on ${landedOn || 'none'}`)
+  await call({ action: 'setFallback', enabled: true, chain: [] })
+
+  const restored = (await call({ action: 'restoreModel', route: ROUTE, model: doomed })).body?.value
+  check('a restored model comes back and leaves the removed list',
+    (restored?.models ?? []).some(entry => entry.model === doomed)
+      && !(restored?.removed ?? []).some(entry => entry.model === doomed))
+  const incomplete = await call({ action: 'removeModel', route: ROUTE })
+  check('removing without a model is refused', incomplete.status === 400,
+    `${incomplete.status} ${incomplete.body?.message ?? ''}`)
+}
+
+// The seats this plugin takes over keep growing upstream, and a replacement
+// cannot inherit the rows the shipped entry appends to them (the slot table
+// refuses a second declaration of the same child key). So the comparison runs
+// here, as a check, rather than as something a person has to remember.
+if (existsSync(join(HERE, 'docs/upstream-parity.json'))) {
+  const parity = spawnSync(process.execPath, [join(HERE, 'tools/check-upstream.mjs')], {
+    cwd: HERE,
+    encoding: 'utf8',
+    env: process.env,
+  })
+  const refused = (parity.stdout ?? '').split('\n').filter(line => line.startsWith('FAIL'))
+  check('every upstream row in the seats we took over is accounted for',
+    parity.status === 0,
+    refused.slice(0, 3).map(line => line.replace(/^FAIL\s+/, '')).join(' | ').slice(0, 380))
 }
 
 rmSync(HOME, { recursive: true, force: true })

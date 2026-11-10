@@ -72,7 +72,7 @@ across upgrades. Defaults:
   name: 'dsh-llm-manage'
   config:
     selector:
-      mode: managed     # 'native' withdraws the shadowed picker
+      mode: managed     # our picker owns the seat; 'native' hands it back to the shipped one
     probe:
       intervalMs: 1200  # delay between deep probes
       timeoutMs: 30000
@@ -110,6 +110,15 @@ The rule is **scope**, not severity:
 A model-scoped failure moves to another model, because a different model can serve the
 turn. An account-scoped failure never moves: every model shares that key, so switching
 would only hide the real problem and burn another request.
+
+A switch cannot rescue the turn that just failed. DSH freezes the provider, model and
+reasoning effort at step preparation, re-validates them when the request is built, and
+replays the same frozen selection on a retry — so the plugin commits the switch with
+`agent.model.select()`, the one path the SDK documents, and the **next** message runs on
+the new model. The failed turn reports its real error instead of a request-time mismatch.
+If the Session still holds the broken selection when the next message is claimed — a
+refused controller call, or a level the session did not drop — the repair is finished
+there, synchronously, before the step reads its selection.
 
 A **route with no adapter** is its own scope. Switching models *on that route* cannot
 help — every model there fails the same way — but switching to another provider can, so
@@ -173,9 +182,14 @@ were not about quota at all. Each reason now has its own wording, and the provid
 message is one clamped line with the full text on hover — inlined in full it was up to 400
 characters, which made the banner taller than the conversation around it.
 
-Two controls sit on the banner: **Switch back** (offered only once a switch was confirmed,
-since it moves the session's model back) and **Stop switching**, which suppresses automatic
-switching for that session until the harness restarts.
+The banner carries the way forward, not just the news. **Continue** appears once a switch
+was confirmed: the platform froze the model for the step that already failed, so the only
+continuation is the next message — and that message stays yours. The button fills an
+editable prompt ("continue from where the previous answer stopped") into the draft and
+persists it; it never sends on your behalf. **Switch back** is offered under the same
+condition, since it moves the session's model back. **Stop switching** suppresses automatic
+switching for that session until the harness restarts. **Dismiss** hides the report for
+that switch only.
 
 Some gateways report a *model's* quota exhaustion as HTTP 429, which the harness's own
 classifier maps to a retryable `RATE_LIMIT` — indistinguishable from an account-wide rate
@@ -215,14 +229,19 @@ catalogue, because verifying all of it at once is what would rate-limit you out.
 
 ## Verifying it
 
-Four suites, all runnable without any particular deployment:
+Five suites, all runnable without any particular deployment:
 
 ```
 node verify.mjs          # Host half: registry, gateway, classification, fallback
 node verify-client.mjs   # Browser half: renders the panel in jsdom and clicks it
 node verify-browser.mjs  # Control geometry in a real engine (headless Chrome)
+node verify-parity.mjs   # Did the shipped seats we take keep their capabilities?
 node verify-live.mjs     # The whole thing against a RUNNING harness (opt-in)
 ```
+
+`verify-parity.mjs` needs the harness **source** (`DSH_CHECKOUT`) and fails without
+it, because its whole job is comparing this plugin against the shipped one. See
+[docs/upstream-parity.md](docs/upstream-parity.md).
 
 Each suite picks a mode automatically:
 
@@ -343,11 +362,107 @@ labels are localised. A development aid, not a test.
 ## Where it appears
 
 - **Settings → Models → the provider card**: the management panel.
-- **The composer model picker**: the managed picker (set `selector.mode: native` to
-  withdraw it and get the shipped picker back untouched).
+- **The composer model picker**: this plugin's picker in the shipped picker's seat — one
+  entry, one panel, with the shipped capabilities (search, provider grouping, keyboard
+  roaming, a trigger that names the current model and level) plus levels, probes, the
+  manager and the usage figures. `selector.mode: native` hands the seat back to the shipped
+  picker and leaves only the health dot, level chip and listing badge on its rows.
 - **Above the composer**: a banner when this session's model was switched.
 
+### Decorating the shipped picker
+
+As of DSH 0.2.2 the shipped picker carries its own reasoning levels, its own badges and the
+provider-default effort, so this plugin stopped shadowing it: the seat belongs to the owner
+and we contribute the marks the owner cannot know — the health verdict, the proficiency
+level use has earned, and the listing badge.
+
+That is a slot contribution (`conversation.input.model.label`), and two of its rules decided
+the implementation:
+
+- A contribution **replaces** the owner's fallback, so the model name is ours to draw. A
+  label that returned nothing would blank the composer control — the failure is invisible in
+  a picker screenshot, so `verify-client.mjs` asserts the name is rendered.
+- The label mounts once per catalogue row, so the plugin's stylesheet is mounted once into
+  `<head>` (re-found by attribute) rather than per instance: a sheet per row would multiply
+  20 KB by the size of the catalogue. A second mount is asserted to reuse it.
+
+The level only appears once use has earned it (level 2 and up) and only where there is room:
+the collapsed trigger keeps the health dot alone, because the owner budgeted its width.
+
+### The composer controller
+
+Inside the composer card, on the row the submit button lives on, sits a control cluster that
+changes shape with the session instead of holding a fixed row of buttons:
+
+- **idle** — the manager button and a dimmed `⌘K`; nothing else. The reasoning level is
+  deliberately absent: the model trigger a few pixels away already names it and opens the
+  panel that owns it, and one fact with two controls reads like two facts.
+- **typing** — adds `Draft 42 chars`, plus attachment and queue counts when they exist.
+- **a submit in flight** — the phase it is in: reading command, command claimed, running
+  command, sending.
+- **a running turn** — `Running 1:07` with a status dot.
+- **waiting on you** — the same line, followed by `waiting for you`.
+
+It is deliberately **additive**. `conversation.composer.bar` owns the editor — IME
+composition, paste, slash adjudication, @-mentions, attachment drops, local echo, the hero
+variant — and replacing it would mean reimplementing all of that while losing every shipped
+`conversation.input.*` seat that renders inside it. The cluster lives in
+`conversation.input.right` — the list the shipped editor already reads for "compact controls
+before the submit action" — so it sits in the card instead of floating above it, and reads
+the same live input state the editor publishes: it reacts without owning a keystroke.
+
+Taking the model seat means inheriting its obligations, not only its space: the shipped
+menu rendered `conversation.input.model.options` there, which is where the agent-team toggle
+registers. The picker renders that slot with the same props (`locked`, `dismiss`,
+`reportFailure`), so switching a team on still happens where it always did — a capability
+that vanished because a replacement did not know the slot existed would be worse than not
+replacing the menu at all.
+
+`⌘K` (or `⌘J`) opens the command palette: a session console, not a chat box. Its rows are
+grouped — **This session**, **Model**, **Diagnostics**, **Manage** — because a flat list of
+eleven rows with eight of them being reasoning stops is a list nobody reads.
+
+- **Search** filters as you type. Matching is by subsequence over label, hint and alias, so
+  `th` finds 探活 and `mdl` finds the dialog row; every row carries English and Chinese
+  aliases, which makes typing one word faster than reading a list. A word that matches
+  nothing says so instead of drawing an empty card.
+- **Levels are one row** naming the stop actually in force (`Level · High`), and that row
+  opens a second page: the stops plus **Auto**, with exactly one of them marked as current.
+  `‹` or `Esc` goes back. The stops used to sit in the root, where six of them outnumbered
+  every other command and pushed the useful rows below the fold.
+- **A command in flight says so.** The running row carries a spinner, every other row is
+  disabled, and the answer — or the failure — lands on the row that was asked. Previously the
+  palette tracked a `busy` flag in state and then never read it while rendering, so a probe
+  that took a round trip looked like a dead row you could click again.
+- **Diagnostics got the rows only it can offer**: refresh the gateway catalogue (a snapshot
+  that bypasses the Host's cached directory), probe every model on this route (batch probe,
+  capped at 40 upstream, submitted and then reported in the probe log rather than blocking
+  the panel for a minute), plus **Recent failovers** and **Probe log**, which open the
+  manager on that tab.
+- **Escape peels one layer at a time**: clear the search word, then leave a sub-page, then
+  close.
+
+Rows are the only things in the palette that are not the search box, and a row that names a
+tab lands on that tab — opening the dialog on the catalogue and making the reader click
+again answers a different question than the row promised. Entry points that name no tab
+(the ⚙ button, `⌘⇧M`, the picker footer) land on the catalogue even if the last visit sat
+elsewhere.
+
+Every row runs a real action through the seats the owner already provides
+(`inputActions.submit`, `inputActions.setDraft`, `directory.select`, the plugin's own Host
+route), so the palette never renders a command it cannot execute. `Enter` runs the
+highlighted row and stops the event there, so it cannot also submit the draft behind it. The
+palette is a fixed surface: the composer card clips its own children, so a popover born
+inside it would be cut at the card's edge.
+
+The palette is drawn from the same material as the model picker card — the theme's menu fill
+on a `::before` layer behind the content, the elevation stroke, `border-l1` for the rule under
+the header. An earlier version filled it with `--dsw-alias-bg-overlay`, which is the scrim
+colour *behind* a dialog rather than a surface colour, so a 560px panel painted with it read
+as a different product pasted over this one.
+
 ### The composer model picker
+
 
 ![The model picker, rendered from a synthetic catalogue](docs/picker.png)
 
@@ -410,6 +525,28 @@ sort by — on a fresh profile it would offer three orderings that all look alik
 usage orderings answer different questions, and on a real profile they disagree: the model
 you have used most is often not the one you are reaching for today.
 
+#### The session options the shipped menu carried
+
+The shipped menu renders two child seats under its root: the model label, and a list of
+session options. The list has exactly one occupant today — the agent-team switch
+(「启用智能体团队协作」 / *Enable agent teamwork*) from `ui-agent-team`.
+
+Taking the seat takes those children with it, and a replacement **cannot** re-declare
+them: a child seat has one declaration and the shipped entry owns it. The options list
+therefore has to be re-provided by hand, against the same projection and the same remote
+call the shipped switch uses — which is what the row at the foot of the picker does. It
+keeps the shipped copy verbatim (compared against upstream every run, both languages),
+hides itself for a child session and when the capability is absent, and **asks before
+turning teamwork off once the session has already run a model choice**, because the next
+turn only keeps its cache if it keeps the same tools. The confirmation is inline in the
+menu rather than in the shipped modal store, which this plugin does not own.
+
+If a future harness lets a replacing entry inherit children, that row should be deleted
+and `renderSlot` used instead. Until then, [docs/upstream-parity.md](docs/upstream-parity.md)
+records the rule and `verify-parity.mjs` enforces it: every shipped occupant of a child
+seat we inherit must be accounted for, and an unlisted one fails the suite — which is
+how a capability stops disappearing quietly.
+
 #### Managing a model without leaving the conversation
 
 The picker is where you look at models most often, so the moment you notice one is unusable
@@ -462,15 +599,121 @@ Two different facts decide what that segment can offer, and conflating them is t
   switch against *this*, so a level the gateway accepts but nobody declared is offered by
   nobody: the segment reads `default` and cannot be changed, however good the probe's answer.
 
-Since 0.1.3 a probe closes that gap itself: when the sweep measures any level, the answer is
-written back through the Host's settings service in the same call, so the levels the gateway
-accepts become switchable without a second click. The write touches only that one model's
-`reasoningEfforts`; deleting those keys restores the previous state. A route whose settings
-the Host cannot edit simply gets no declaration — the probe's verdict still returns, and the
-detail block keeps its manual **Use measured levels** action as the fallback.
+A probe closes that gap by itself: when the sweep measures any level, the answer is written
+back through the Host's settings service in the same call, so the levels the gateway accepts
+become switchable without a second click. A route whose settings the Host cannot edit simply
+gets no declaration — the probe's verdict still returns, and the detail block keeps its
+manual **Use measured levels** action as the fallback.
 
-A level the provider refuses is repaired rather than repeated: the session moves to the
-model's own default effort, once per turn, and the retry carries the corrected level.
+The write **merges**, and since DSH 0.2.2 that is not a stylistic choice: the pi-ai schema reads
+a declaration as closed, so every level the dict does not name is pinned to *unsupported*.
+Replacing the dict would therefore delete facts the probe never measured — the official `off`
+level, a wire spelling that is not the level id, rows another editor wrote. Only missing levels
+are added, `off` is never invented (an unset level already means "send nothing", which is what
+this plugin measures as the gateway's ceiling, so declaring `off` would be a claim it cannot
+support), and a model the platform already offers every measured level for is left untouched
+entirely: no write, and `already: true` in the answer.
+
+The rollback is unchanged and narrow: delete that model's `reasoningEfforts` keys.
+
+A level the provider refuses is repaired rather than repeated — but the repair is to **clear**
+the level, not to pick another: DSH 0.2.2 gives "no explicit level" its own meaning (the adapter
+default, validated against the declaration), so re-pinning one would turn an automatic setting
+into an explicit one. The session is moved once per turn and the retry carries no level.
+
+#### The session row underneath
+
+The shipped menu ends with a row of session options, and the one that exists today
+is *Enable agent teamwork*. We cannot inherit it: the renderer only hands an entry
+the `renderSlot` prop when that entry **declares** the child slots itself, and the
+slot table refuses a second declaration of a key the shipped entry already
+declared. A replacement therefore renders fewer things, silently.
+
+So the row is drawn here instead (`TeamModeRow`), driving the same projection and
+the same remote method the shipped one does, and matching its behaviour point for
+point: hidden for a child session, hidden while the projection is missing, and a
+confirmation before switching it **off** once a model has been chosen in this
+session — turning teamwork off mid-conversation stops the shared task tools, and
+that is worth one question. The copy is the shipped copy, verbatim, in both
+languages.
+
+This is a debt, not a design preference: if the framework ever lets a replacement
+inherit a seat's children, delete the row and call `renderSlot` again. The
+parity check below exists to make sure the opposite case — a row appearing
+upstream that nobody reproduces — fails loudly instead of going quiet.
+
+### The model manager
+
+A dialog for the questions a picker cannot hold: which models may replace a failing
+route, what proficiency each model has earned, and what the last probes said. It opens
+from the picker's footer, from **Ctrl/⌘+Shift+M** anywhere in the session, and from the
+composer palette's *Manage models* row — the last two matter because the shipped picker
+is the default, and a dialog reachable only from our own picker would be unreachable.
+
+Four tabs, one draft:
+
+- **Catalog** — the same model-first list as the picker, with the four tools
+  inline (pin, favorite, visibility, probe) and a row that expands into the
+  proficiency editor beside the reasoning source and the connection summary.
+- **Failover** — the ordered candidates, the enable switch, and a local "check
+  the chain" that answers from the catalog and the recorded health instead of
+  spending a request per candidate. Four notes above the button say what the
+  policy will and will not do. Adding a candidate opens a searchable list, not a
+  `<select>`: eighty models in a native dropdown are eighty identical lines, so
+  the list carries each candidate's health (dot and word), the measured level and
+  the route, sorts answered routes first, and filters as you type.
+- **Switches** — the automatic switches that actually happened, kept across
+  sessions: which model failed, what it moved to, whether that recovered the turn,
+  and how long ago. The aggregate is listed first and sorted by how often the model
+  failed, because "which model keeps doing this" is the only form of the answer that
+  can change a chain; the raw events sit below it as evidence. The log is bounded
+  (200 entries) and clearable, since a history nobody can clear eventually describes
+  a machine that no longer exists. Only *proven* switches are written — the same
+  event that puts a banner on screen — so the count cannot include an intent that
+  never landed. Each raw event names the Session it happened in, and that name is a
+  link: clicking it opens the Session, which is the one place a reader can go and look
+  at what actually failed. The label comes from the shell's own Session list rather
+  than from the log, so a Session renamed since is not remembered under its old name,
+  and a Session the shell no longer lists falls back to the id it was recorded with.
+  Leaving for a Session closes the dialog through the same guard as the close button —
+  an unsaved chain is still not dropped by a stray click, even when the click was
+  somewhere useful.
+- **Probes** — the last forty probes, newest first, written by every deep probe
+  whether it came from the panel, the picker, the tool or a batch.
+
+The dialog's buttons draw their own chrome from the theme (`border-l3` hairline,
+`button-primary-fill` for the committing action) instead of inheriting the
+browser's grey `<button>` face, which reads as a disabled control in this theme.
+
+A model the gateway has withdrawn can be taken out of the catalogue from the row
+it expands into. This is a local decision, not a gateway call — the plugin cannot
+unregister a model upstream, and a button claiming otherwise would do nothing — so
+it is kept in its own overlay document and is undone from the same tab: the removed
+models are listed underneath the catalogue, marked with whether the gateway still
+serves them. Removal is keyed by **model**, not by route and model, because the
+catalogue rows are model-first: hiding one route's copy would leave the row on
+screen and the removal would read as broken. A removed model also leaves the
+fallback chain, because routing a turn into a model the user just took away
+contradicts the list they edited.
+
+The gateway retires models without telling anyone, so the directory read that decides
+which rows still exist is worth distrusting on a delay: it is cached for thirty
+minutes, because each read costs a round trip per route. The header's refresh control
+forces that read, and the catalog states in one line what it is based on — which route,
+how many models, how old the reading. The result is reported by route and, when the
+gateway dropped something, as the **names**; "3 retired" would hand the matching of ids
+back to the user, which is the work the control exists to remove. Routes that expose no
+baseURL have no directory to read at all, so they are **left out of that line** rather
+than listed as unavailable: the built-in routes are in that state on every pull, and
+saying so once per route buried the one reading that meant something under a dozen that
+could never change and had no action behind them. Only "not one route could be read"
+turns the pull red.
+
+Only what has no immediate meaning elsewhere waits for **Save**: the fallback
+chain and the manual proficiency. Pins, favorites and visibility write the moment
+you click them, because they already behave that way in the panel and drafting
+them would make "hide" look broken until a button was pressed. Closing with
+unsaved edits asks first, and the discard path writes nothing.
 
 ### Panel controls
 
@@ -590,6 +833,30 @@ hunting for a file: **Clear usage** at the bottom of the panel, or the `reset-us
 action, for one model, one route, or the whole profile. Set `usage.enabled: false` to turn
 the ledger off entirely.
 
+## Keeping up with the shipped menu
+
+Replacing a shipped seat means owing it the rows that seat appends. That debt is
+easy to pay once and then forget: *Enable agent teamwork* was missing for a week
+because the replacement simply rendered one fewer line, and nothing failed.
+
+`docs/upstream-parity.json` is the ledger — every seat we shadow, its child slots,
+and every upstream row in them, marked as reproduced (with where) or deliberately
+skipped (with why). `tools/check-upstream.mjs` reads it and checks three things
+against the checkout:
+
+1. each seat and child slot still exists where the ledger says;
+2. every upstream registration into those child slots has a line in the ledger —
+   an unfamiliar `id` fails the check rather than shipping as a silent omission;
+3. the copy we reproduce still matches the shipped copy, character for character,
+   in both languages.
+
+`verify.mjs` runs it as one of its checks, so the comparison happens whenever the
+suite is run instead of whenever someone remembers:
+
+```
+npm run check:upstream          # needs DSH_CHECKOUT
+```
+
 ## Storage
 
 One atomically-written JSON document per route under
@@ -601,6 +868,11 @@ Usage is the one part of that document written in batches rather than per event 
 are debounced (`usage.flushMs`) because a session can commit many messages in a row, and the
 panel flushes before it reads. The backfill watermark lives in a separate
 `__usage__.json` in the same directory.
+
+Two more documents hold decisions that outlive a session: `__failover__.json` keeps
+the proven switch history (bounded at 200 entries), and `__removed__.json` keeps the
+models taken out of the catalogue (bounded at 400). Both are local to this profile
+and deleting either one only forgets that history.
 
 ## Agent tool
 
@@ -649,10 +921,11 @@ Enabling or disabling the bundle does not bust the ESM module cache for either h
   backfill covers it on the next run, unless `usage.seed` is off.
 - The quota fallback needs the failing model's id, which it takes from the last
   `agent/request` it observed for that session.
-- The managed picker shadows the shipped picker at `priority: -1` and re-supplies its
-  `inject` face. That face is a per-registration business contract, so a future change to
-  the shipped picker's face needs this plugin updated in step. `selector.mode: native`
-  withdraws the shadow without a restart.
+- The `managed` picker (the default) shadows the shipped picker at `priority: -1` and
+  re-supplies its `inject` face. That face is a per-registration business contract, so a
+  future change to the shipped picker's face needs this plugin updated in step.
+  `selector.mode: native` withdraws the shadow without a restart and leaves the shipped
+  picker in place, decorated by the `conversation.input.model.label` seat.
 
 ## Licence
 

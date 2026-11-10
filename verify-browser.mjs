@@ -74,6 +74,12 @@ const PAGE = `<!doctype html>
     --ds-font-family-code:ui-monospace,SFMono-Regular,Menlo,monospace;
     --dsw-radius-xs:4px;--dsw-radius-sm:8px;--dsw-radius-md:12px;--dsw-radius-lg:16px;
     --dsw-radius-xl:20px;
+    /* The dialog scrim and card frame, copied from the theme's own dialog
+       primitives: bg-mask-1 is the mask layer, mask-blur the backdrop filter it
+       pairs with, radius-panel the card radius. */
+    --dsw-alias-bg-mask-1:rgba(0,0,0,.24);--dsw-mask-blur:none;--dsw-radius-panel:28px;
+    --dsw-alias-button-primary-fill:rgb(15,17,21);--dsw-alias-button-primary-hover:rgb(67,69,74);
+    --dsw-alias-label-primary-foreground:rgb(255,255,255);
     --dsw-specific-menu:rgba(248,249,250,.94);
     --dsw-alias-menu-group-header-fill:rgba(248,249,250,.94);
     --dsw-menu-backdrop-filter:blur(40px) saturate(150%);

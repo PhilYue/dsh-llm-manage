@@ -19,7 +19,7 @@
  *
  * Exits non-zero when a check fails.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
@@ -47,6 +47,21 @@ const fromRoot = createRequire(join(DH, 'package.json'))
 // redirect below cannot hide it.
 const HOME = mkdtempSync(join(tmpdir(), 'llmm-client-'))
 process.env.DSH_HOME = HOME
+// The automatic-switch history is written by the Host only once a switch is
+// proven, and no headless run can prove one. Seeding the document states the
+// fact instead of pretending the panel invented it.
+{
+  const dir = join(HOME, 'storages', 'llm-manage')
+  mkdirSync(dir, { recursive: true })
+  const now = Date.now()
+  writeFileSync(join(dir, '__failover__.json'), JSON.stringify({
+    records: [
+      { at: now - 3000, sessionId: 'sess-seed-a', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'unreached' },
+      { at: now - 2000, sessionId: 'sess-seed-b', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'reached' },
+      { at: now - 1000, sessionId: 'sess-seed-c', from: { route: 'seed-gateway', model: 'seeded-other' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'error', detail: '', outcome: 'ran-elsewhere' },
+    ],
+  }), 'utf8')
+}
 
 const registered = []
 const listeners = {}
@@ -59,7 +74,12 @@ const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></h
   pretendToBeVisual: true,
 })
 const { window } = dom
-for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'Event', 'MouseEvent', 'CustomEvent', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame', 'MutationObserver', 'AbortController']) {
+// `AbortController` is deliberately NOT borrowed from jsdom: the Host half calls
+// Node's `fetch`, and undici rejects a signal built by another realm
+// ("Expected signal to be an instance of AbortSignal"). Borrowing it made every
+// forced gateway directory read fail here while working in production — a test
+// artefact that reads like a product bug. Node's own pair is the consistent one.
+for (const key of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'Event', 'MouseEvent', 'CustomEvent', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame', 'MutationObserver']) {
   if (window[key] === undefined) continue
   // Node 26 defines some of these (navigator, AbortController) as getter-only
   // globals, so an assignment throws; defineProperty overrides them instead.
@@ -232,6 +252,9 @@ const clientServices = {
   },
   remote: { session: { verb: () => Promise.resolve(undefined) } },
 }
+// Drawn by the history tab when a row names a Session: one navigation action, which is
+// the whole point of putting the Session on the row.
+const navigations = []
 const clientCtx = (() => {
   const require_ = (path) => {
     if (!clientDeclared.has(path)) throw new Error(`cannot get property "${path}" without inject`)
@@ -246,6 +269,16 @@ const clientCtx = (() => {
       return { get session() { require_('remote.session'); return clientServices.remote.session } }
     },
   })
+  // Nested injects are how this client reaches optional faces without gating the whole
+  // plugin on them (a client that lacks `uiWorkspace` must still mount). Resolved here so
+  // a test can see what the UI actually asked for, rather than what it was handed.
+  scope.inject = (_names, callback) => {
+    const nested = {
+      uiWorkspace: { openSession: (sessionId) => { navigations.push(sessionId) } },
+    }
+    const release = callback(nested)
+    return () => { if (typeof release === 'function') release() }
+  }
   return scope
 })()
 captured.apply(clientCtx)
@@ -1138,6 +1171,15 @@ check('a hidden row can be unhidden from the menu that hid it',
   // answer instead of re-reading.
   let bannerHost = null
   let bannerRoot = null
+  // The dock hands the banner the same input actions the composer uses; the
+  // continuation path must go through them rather than through a Host call, so
+  // the draft the user sees is the draft the editor holds.
+  const drafts = []
+  let persisted = 0
+  const inputActions = {
+    setDraft: (text) => { drafts.push(text) },
+    persistDraft: () => { persisted += 1 },
+  }
   const bannerText = () => bannerHost?.textContent ?? ''
   const renderBanner = async (next) => {
     verdict = next
@@ -1149,7 +1191,7 @@ check('a hidden row can be unhidden from the menu that hid it',
     window.document.body.appendChild(bannerHost)
     bannerRoot = createRoot(bannerHost)
     await act(async () => {
-      bannerRoot.render(React.createElement(dock.Component, { sessionId: 'sess-banner' }))
+      bannerRoot.render(React.createElement(dock.Component, { sessionId: 'sess-banner', inputActions }))
       await new Promise(resolve => setTimeout(resolve, 40))
     })
   }
@@ -1174,6 +1216,11 @@ check('a hidden row can be unhidden from the menu that hid it',
     !/改回|Switch back/i.test(bannerText()), bannerText().slice(0, 120))
   check('the banner offers to stop future switches',
     /不再自动切换|Stop switching/i.test(bannerText()), bannerText().slice(0, 120))
+  const bannerButtons = () => [...bannerHost.querySelectorAll('.llmm-banner-acts button')]
+  const buttonNamed = (pattern) => bannerButtons().find(node => pattern.test(node.textContent ?? ''))
+  check('a switch that never landed offers no continuation',
+    buttonNamed(/接续|^Continue$/i) === undefined,
+    bannerButtons().map(node => node.textContent).join(' | '))
 
   await renderBanner({
     at: Date.now(), from: { route: ROUTE, model: at(0) },
@@ -1183,6 +1230,21 @@ check('a hidden row can be unhidden from the menu that hid it',
   check('a proven switch reports success and offers the way back',
     /已自动切换模型|Model switched/i.test(bannerText()) && /改回|Switch back/i.test(bannerText()),
     bannerText().slice(0, 140))
+  check('a proven switch offers to continue on the new model',
+    buttonNamed(/接续|^Continue$/i) !== undefined,
+    bannerButtons().map(node => node.textContent).join(' | '))
+  await act(async () => {
+    buttonNamed(/接续|^Continue$/i)?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  check('continuing fills an editable draft instead of sending one',
+    drafts.length === 1 && /从中断处|from where the previous answer stopped/i.test(drafts[0]),
+    JSON.stringify(drafts))
+  check('the filled draft is persisted through the editor',
+    persisted === 1, `${persisted} persist(s)`)
+  check('the banner says where the continuation went',
+    /已填入草稿|Filled into the draft/i.test(bannerText()), bannerText().slice(0, 160))
+  check('continuing does not submit on its own',
+    drafts.length === 1 && persisted === 1, `drafts=${drafts.length} persists=${persisted}`)
 
   await renderBanner({
     at: Date.now(), from: { route: ROUTE, model: at(0) },
@@ -1393,9 +1455,13 @@ check('the picker card paints the menu material, not the overlay scrim',
   `background=${menuMaterialRule?.background} backdrop-filter=${menuMaterialRule?.['backdrop-filter']}`)
 // A fallback chain may legitimately name the scrim as the last resort, so look for a
 // direct paint: `background:` whose whole value is that token.
+const scrimPrimary = cssText.match(/background:\s*var\(--dsw-alias-bg-overlay/g) ?? []
 check('nothing paints a surface directly from the overlay scrim token',
-  (cssText.match(/background:\s*var\(--dsw-alias-bg-overlay\)/g) ?? []).length === 0,
-  `${(cssText.match(/background:\s*var\(--dsw-alias-bg-overlay\)/g) ?? []).length} rule(s)`)
+  scrimPrimary.length === 0,
+  `${scrimPrimary.length} rule(s)`)
+check('the command palette borrows the picker card\'s material',
+  /\.llmm-pal::before\{[^}]*--dsw-specific-menu/.test(cssText) && /\.llmm-pal\{[^}]*isolation:isolate/.test(cssText),
+  /\.llmm-pal::before\{[^}]*--dsw-specific-menu/.test(cssText) ? 'menu fill' : 'no menu fill')
 
 const hoverMismatch = ['background'].filter(key =>
   declarationsOf('.llmm-row:hover')?.[key] !== undefined
@@ -1702,6 +1768,19 @@ await act(async () => {
   const button = detailOf()?.querySelector('.llmm-inline-act') ?? null
   check('a model measured but not declared offers to declare the measurement',
     button !== null, detailOf()?.textContent?.slice(0, 90) ?? 'no detail')
+  // Measured, but recorded nowhere: the probe declares on its own now, so the state the
+  // button exists for has to be seeded — otherwise the click is an idempotent no-op and
+  // the assertion below would pass without the button doing anything.
+  const forgetDeclaration = (model) => {
+    const next = structuredClone(settingsValue)
+    const entries = next.providers?.[ROUTE]?.models ?? []
+    const index = entries.findIndex(entry => (typeof entry === 'string' ? entry : entry?.id) === model)
+    if (index !== -1 && entries[index] !== null && typeof entries[index] === 'object') {
+      delete entries[index].reasoningEfforts
+    }
+    settingsValue = next
+  }
+  forgetDeclaration(UNDECLARED)
   const before = settingsWrites.length
   await act(async () => {
     button?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
@@ -1714,11 +1793,12 @@ await act(async () => {
   check('clicking it declares exactly the levels the gateway accepted',
     settingsWrites.length === before + 1
       && Object.keys(written?.reasoningEfforts ?? {}).join(',') === 'low,high,max',
-    JSON.stringify(written ?? null))
+    `writes=${settingsWrites.length - before} keys=${Object.keys(written?.reasoningEfforts ?? {}).join(',')}`)
 
-  // The same fact from the composer's side: the level segment must be a live
-  // control for a measured-but-undeclared model, and it must lead to the fix —
-  // a dead segment is what made the user ask why they could not switch.
+  // The same fact from the composer's side: the level rail must offer the fix for
+  // a measured-but-undeclared model instead of a dead control, and the fix has to be
+  // the measurement itself — a hint with nothing to act on is what made the user ask
+  // why they could not switch.
   await act(async () => { pickerRoot.render(null) })
   holder.value = {
     current: { provider: ROUTE, model: UNDECLARED },
@@ -1726,28 +1806,41 @@ await act(async () => {
     groups: [{ id: ROUTE, name: ROUTE, models: [{ id: UNDECLARED }] }],
   }
   await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
-  const segment = () => pickerContainer.querySelector('.llmm-trigger .llmm-effort')
-    ?? pickerContainer.querySelector('.llmm-effort')
-  await waitFor(() => segment() !== null)
-  check('a measured-but-undeclared model keeps the level segment clickable',
-    segment() !== null && segment().getAttribute('aria-haspopup') === 'menu'
-      && segment().getAttribute('aria-disabled') !== 'true',
-    `haspopup=${segment()?.getAttribute('aria-haspopup')} disabled=${segment()?.getAttribute('aria-disabled')}`)
-  const writesBefore = settingsWrites.length
-  await act(async () => {
-    segment().dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    await waitFor(() => window.document.querySelector('.llmm-effort-menu') !== null)
-  })
-  const menuText = window.document.querySelector('.llmm-effort-menu')?.textContent ?? ''
-  check('its menu explains the gap and offers the write instead of dead levels',
-    /declared|配置|Declare|Write/i.test(menuText), menuText.slice(0, 90) || 'no menu')
-  const declareInMenu = window.document.querySelector('.llmm-effort-declare')
-  await act(async () => {
-    declareInMenu?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-    await waitFor(() => settingsWrites.length > writesBefore)
-  })
-  check('the menu action declares the measured levels',
-    settingsWrites.length === writesBefore + 1, `${settingsWrites.length - writesBefore} write(s)`)
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-rail-section') !== null)
+    })
+  }
+  const railEmpty = () => pickerMenuQuery('.llmm-rail-empty')
+  const railAction = () => railEmpty()?.querySelector('.llmm-inline-act') ?? null
+  const railOpen = await waitFor(() => railEmpty() !== null)
+  check('a measured-but-undeclared model puts the measurement in the level rail',
+    railOpen === true && /declared|声明|配置/i.test(railEmpty()?.textContent ?? ''),
+    railEmpty()?.textContent?.slice(0, 90) ?? 'no rail')
+  check('the rail action names the measurement it will take',
+    /measure|探测/i.test(railAction()?.textContent ?? ''), railAction()?.textContent ?? 'no action')
+  // The probe declares on its own, so the state the action exists for has to be
+  // seeded again: otherwise the click is an idempotent no-op and the assertion below
+  // would pass without the action doing anything.
+  forgetDeclaration(UNDECLARED)
+  const writesBeforeProbe = settingsWrites.length
+  const realProbeFetch = globalThis.fetch
+  globalThis.fetch = async (url, init) => (String(url).includes('/chat/completions')
+    ? syntheticGatewayFetch(url, init)
+    : realProbeFetch(url, init))
+  try {
+    await act(async () => {
+      railAction()?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => settingsWrites.length > writesBeforeProbe, 4000)
+    })
+  } finally {
+    globalThis.fetch = realProbeFetch
+  }
+  check('the rail measures the model and declares what it found',
+    settingsWrites.length === writesBeforeProbe + 1,
+    `${settingsWrites.length - writesBeforeProbe} write(s)`)
   await act(async () => { pickerRoot.render(null) })
   await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
 }
@@ -1864,18 +1957,31 @@ await act(async () => {
     }
     await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, face)) })
   }
-  const segment = () => pickerContainer.querySelector('.llmm-effort')
-  const levelMenu = () => window.document.body.querySelector('.llmm-effort-menu')
-  const items = () => Array.from(levelMenu()?.querySelectorAll('.llmm-effort-item') ?? [])
+  // The level is a rail inside the panel now, and the panel is portalled — so every
+  // level query goes through the menu, not through the trigger's container.
+  const rail = () => pickerMenuQuery('input.llmm-rail')
+  const railSection = () => pickerMenuQuery('.llmm-rail-section')
+  const railOut = () => pickerMenuQuery('.llmm-rail-out')
+  const railAuto = () => pickerMenuQuery('.llmm-rail-auto')
+  const railTicks = () => pickerMenuQueryAll('.llmm-rail-tick')
+  const triggerEffort = () => pickerContainer.querySelector('.llmm-trigger-effort')
   const click = async (node) => {
     await act(async () => { node.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  }
+  // A range input is driven through React's onChange, which listens for `input`.
+  const setRail = async (value) => {
+    await act(async () => {
+      const input = rail()
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setter.call(input, String(value))
+      input.dispatchEvent(new window.Event('input', { bubbles: true }))
+    })
   }
 
   await rerender({ provider: ROUTE, model: ADJUSTABLE })
   check('the trigger names the level in force, taken from the model own default',
-    segment() !== null && /High/.test(segment().textContent ?? ''), segment()?.textContent ?? 'no segment')
-  check('an adjustable model makes the level segment a control',
-    segment() !== null && !segment().classList.contains('llmm-effort-static'), segment()?.className ?? '')
+    triggerEffort() !== null && /High/.test(triggerEffort().textContent ?? ''),
+    triggerEffort()?.textContent ?? 'no level on the trigger')
 
   // The list may already be open from an earlier block, and the trigger toggles:
   // clicking unconditionally would close it, and `waitFor` resolves false on
@@ -1900,23 +2006,39 @@ await act(async () => {
     pickerMenuQueryAll('.llmm-chip-effort').length === 1,
     `${pickerMenuQueryAll('.llmm-chip-effort').length} chip(s)`)
 
-  await click(segment())
-  await waitFor(() => levelMenu() !== null)
-  check('opening the level menu closes the model list', pickerMenu() === null, 'both surfaces are open')
-  const offered = items().map(node => node.textContent.replace('✓', '').trim())
-  check('the level menu offers exactly the levels the model declared',
-    offered.join(',') === 'Low,High,Max', offered.join(',') || 'empty')
-  check('no default row is offered when the model names its own default',
-    !offered.some(label => /Default|默认/.test(label)), offered.join(','))
+  const railOpen = await waitFor(() => rail() !== null)
+  check('the panel carries the level rail instead of a second menu', railOpen === true)
+  check('the rail stops at every declared level plus the automatic one',
+    rail()?.max === String(EFFORTS.length) && railTicks().length === EFFORTS.length + 1,
+    `max=${rail()?.max} ticks=${railTicks().length}`)
+  check('the rail starts on the level the model names as its default',
+    /High/.test(railOut()?.textContent ?? '') && /auto|自动/i.test(railOut()?.textContent ?? ''),
+    railOut()?.textContent ?? 'no output')
+  check('the rail spells the level and its id for a screen reader',
+    /High, auto/.test(rail()?.getAttribute('aria-valuetext') ?? ''),
+    rail()?.getAttribute('aria-valuetext') ?? 'no value text')
+  check('the automatic stop reports itself as automatic',
+    railAuto()?.getAttribute('aria-pressed') === 'true',
+    railAuto()?.getAttribute('aria-pressed') ?? 'no auto control')
 
   const before = selections.length
-  await click(items().find(node => /Max/.test(node.textContent)))
-  await waitFor(() => levelMenu() === null)
+  await setRail(EFFORTS.length)
+  await waitFor(() => selections.length > before)
   const chosen = selections.slice(before)
-  check('choosing a level re-selects the same model with that level',
+  check('moving the rail re-selects the same model with the level under the thumb',
     chosen.length === 1 && chosen[0].provider === ROUTE && chosen[0].model === ADJUSTABLE
       && chosen[0].reasoningEffort === 'max',
     JSON.stringify(chosen))
+  check('an explicit level stops reporting itself as automatic',
+    railAuto()?.getAttribute('aria-pressed') === 'false',
+    railAuto()?.getAttribute('aria-pressed') ?? 'no auto control')
+
+  const beforeAuto = selections.length
+  await click(railAuto())
+  await waitFor(() => selections.length > beforeAuto)
+  check('the automatic stop drops the explicit level instead of pinning one',
+    selections[beforeAuto] !== undefined && selections[beforeAuto].reasoningEffort === undefined,
+    JSON.stringify(selections[beforeAuto] ?? null))
 
   // The shipped directory spells the retained level as a NAME ("High"), and passing it
   // to select() makes resolveCallConfig reject the selection — the exact failure the
@@ -1948,14 +2070,161 @@ await act(async () => {
     JSON.stringify(selections[beforeRepick] ?? null))
 
   await rerender({ provider: ROUTE, model: PLAIN })
-  const plainLabel = (segment()?.textContent ?? '').replace('·', '').trim()
+  if (pickerMenu() === null) await click(pickerContainer.querySelector('.llmm-trigger'))
+  const plainLabel = (triggerEffort()?.textContent ?? '').replace('·', '').trim()
   check('a model that declares nothing shows the default instead of hiding the row',
-    /^(Default|默认)$/.test(plainLabel), segment()?.textContent ?? 'no segment')
-  check('a model that declares nothing is not a control',
-    segment() !== null && segment().classList.contains('llmm-effort-static'), segment()?.className ?? '')
-  await click(segment())
-  await new Promise(resolve => setTimeout(resolve, 30))
-  check('clicking a non-adjustable level segment opens nothing', levelMenu() === null)
+    /^(Default|默认)$/.test(plainLabel), triggerEffort()?.textContent ?? 'no level on the trigger')
+  const plainOpen = await waitFor(() => railSection() !== null)
+  check('a model that declares nothing gets no movable rail',
+    plainOpen === true && rail() === null && railAuto()?.disabled === true,
+    `rail=${rail() !== null} auto=${railAuto()?.disabled}`)
+
+  // The shipped picker lets the arrow keys walk its rows; without that a search hit
+  // can only be taken with the mouse, which is the slow half of searching. Our rows
+  // are real <button> elements, so Enter and Space stay the platform's job — what has
+  // to be added is the focus movement, out of the search box and back up.
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+    })
+  }
+  {
+    const rowButtons = () => pickerMenuQueryAll('.llmm-item-select')
+    const press = async (key) => {
+      await act(async () => {
+        const target = window.document.activeElement ?? pickerMenuQuery('.llmm-input')
+        target.dispatchEvent(new window.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+      })
+    }
+    pickerMenuQuery('.llmm-input')?.focus()
+    await press('ArrowDown')
+    const firstFocused = window.document.activeElement === rowButtons()[0]
+    await press('ArrowDown')
+    const secondFocused = window.document.activeElement === rowButtons()[1]
+    await press('ArrowUp')
+    const backFocused = window.document.activeElement === rowButtons()[0]
+    await press('ArrowUp')
+    const wrapped = window.document.activeElement === rowButtons()[rowButtons().length - 1]
+    check('the arrow keys walk the model list from the search box',
+      rowButtons().length > 2 && firstFocused && secondFocused && backFocused && wrapped,
+      `rows=${rowButtons().length} first=${firstFocused} second=${secondFocused} back=${backFocused} wrap=${wrapped}`)
+  }
+
+  // The seat we took carries a child slot the shipped menu rendered into: the agent
+  // team switch registers there. A replacing entry CANNOT inherit it — `renderSlot`
+  // is only injected into entries that declare children, and declaring this child
+  // throws "already declared" because the shipped entry owns the declaration. So the
+  // capability is re-provided against the same projection and the same remote call,
+  // and these checks exist because a silent omission is exactly the regression: the
+  // first version of this file spied a renderSlot prop it had injected itself, which
+  // proved the call site existed while the switch was missing on every real page.
+  if (pickerMenu() === null) {
+    await act(async () => {
+      pickerContainer.querySelector('.llmm-trigger')
+        .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-menu-body') !== null)
+    })
+  }
+  {
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
+    const teamCalls = []
+    const face = (overrides) => ({
+      ...pickerInjected,
+      sessionId: 'sess-picker',
+      useSession: () => false,
+      useSessions: () => false,
+      // The projection the shipped switch reads, with the shape that row expects.
+      useProjection: (name) => (name === 'agentTeam'
+        ? { enabled: false }
+        : name === 'modelSelection' ? { lastUsed: { route: 'r', model: 'm' } } : undefined),
+      setTeamEnabled: (id, enabled) => {
+        teamCalls.push({ id, enabled })
+        return Promise.resolve({ ok: true })
+      },
+      ...overrides,
+    })
+    /** Mount the picker with a given face and make sure its card is on screen. */
+    const renderFace = async (props) => {
+      await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, props)) })
+      if (pickerMenu() === null) {
+        await act(async () => {
+          pickerContainer.querySelector('.llmm-trigger')
+            .dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+        })
+      }
+      await act(async () => { await settle() })
+    }
+    const teamRow = () => pickerMenuQuery('.llmm-opt')
+    const teamSwitch = () => pickerMenuQuery('.llmm-opt .llmm-switch')
+    const click = async (element) => {
+      await act(async () => {
+        element.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+        await settle()
+      })
+      await act(async () => { await settle() })
+    }
+
+    await renderFace(face({}))
+    const rowShown = teamRow() !== null
+    const switchShown = teamSwitch() !== null
+    check('the picker re-provides the session option the shipped menu carried',
+      rowShown && switchShown
+        && teamSwitch().getAttribute('role') === 'switch'
+        && teamSwitch().getAttribute('aria-checked') === 'false'
+        && (pickerMenuQuery('.llmm-opt .llmm-opt-label')?.textContent ?? '') !== '',
+      `row=${rowShown} switch=${switchShown} checked=${teamSwitch()?.getAttribute('aria-checked')} label=${JSON.stringify(pickerMenuQuery('.llmm-opt .llmm-opt-label')?.textContent ?? null)}`)
+
+    await click(teamSwitch())
+    check('turning teamwork on asks the shipped remote, not a local toggle',
+      teamCalls.length === 1 && teamCalls[0].id === 'sess-picker' && teamCalls[0].enabled === true,
+      JSON.stringify(teamCalls))
+
+    // Already-on, with a model choice behind it: the shipped row confirms before it
+    // stops sharing the task board, because the next turn's cache depends on it.
+    teamCalls.length = 0
+    await renderFace(face({
+      useProjection: (name) => (name === 'agentTeam'
+        ? { enabled: true }
+        : name === 'modelSelection' ? { lastUsed: { route: 'r', model: 'm' } } : undefined),
+    }))
+    await click(teamSwitch())
+    const asked = pickerMenuQuery('.llmm-opt .llmm-opt-confirm') !== null
+    check('stopping teamwork after a model choice asks first',
+      asked && teamCalls.length === 0,
+      `confirm=${asked} calls=${JSON.stringify(teamCalls)}`)
+    const confirmButton = pickerMenuQuery('.llmm-opt-confirm .llmm-dlg-btn-primary')
+    await click(confirmButton)
+    check('the confirmation is what actually stops it',
+      teamCalls.length === 1 && teamCalls[0].id === 'sess-picker' && teamCalls[0].enabled === false,
+      JSON.stringify(teamCalls))
+
+    // Without the model-selection projection the shipped row cannot tell whether
+    // stopping would cost the next turn its cache, so it disables the switch
+    // rather than guessing.
+    await renderFace(face({
+      useProjection: (name) => (name === 'agentTeam' ? { enabled: false } : undefined),
+    }))
+    const blindSwitch = teamSwitch()
+    check('the switch stays disabled while the selection projection is missing',
+      blindSwitch !== null && blindSwitch.disabled === true,
+      `present=${blindSwitch !== null} disabled=${blindSwitch && blindSwitch.disabled}`)
+
+    // Two cases where the shipped row renders nothing, and ours must agree: a child
+    // session has no team of its own, and a client without the capability has no
+    // switch to draw.
+    await renderFace(face({ useSession: () => true }))
+    const childHidden = teamRow() === null
+    await renderFace(face({ useProjection: () => undefined }))
+    const absentHidden = teamRow() === null
+    check('no teamwork switch for a child session or a client without the capability',
+      childHidden && absentHidden,
+      `child=${childHidden} absent=${absentHidden}`)
+
+    // Put the face back for whatever runs after this block.
+    await renderFace(face({}))
+  }
 }
 
 await act(async () => { pickerRoot.unmount() })
@@ -2047,6 +2316,879 @@ check('a cleared counter reads as never used, not as a stale number',
     check('the fallback asks the cheap action first', asked[0] === 'selectorMode', asked.join(' → '))
   }
   globalThis.fetch = originalFetch
+}
+
+// ── one model, two routes, one proficiency ──────────────────────────────────
+// The label sits beside a MODEL name, and the same model can be served by two routes
+// (a wrapper beside the original). Reading one route's ledger would show the level the
+// user earned on one transport and "never used" on the other — the same number has to
+// be there whichever route the shipped picker happens to label.
+{
+  const SHARED = at(0)                    // also served by MIRROR_ROUTE
+  for (let seq = 200; seq < 212; seq += 1) {
+    usageEmit('session/event', { id: 'sess-shared' },
+      usageMessage(seq, SHARED, Date.now() - 60000, { inputTokens: 10, outputTokens: 2 }))
+  }
+  const rows = (await (await hostCall({ action: 'badges' })).json())?.value ?? []
+  const shared = rows.filter(row => row.model === SHARED)
+  check('a model served by two routes reports the same level on both labels',
+    shared.length >= 2 && shared[0].uses >= 12
+      && shared.every(row => row.level === shared[0].level && row.uses === shared[0].uses),
+    JSON.stringify(shared))
+}
+
+// ── the marks this plugin puts INSIDE the shipped picker ─────────────────────
+// Handing the composer seat back to the owner means the plugin's value has to ride in
+// the owner's own label. Two failure modes matter and neither is visible in a picker
+// screenshot: a contribution REPLACES the owner's fallback, so a label that forgets the
+// model name blanks the composer control; and the label mounts once per catalogue row,
+// so a stylesheet per instance would multiply a 20 KB sheet by the catalogue size.
+{
+  const labelSlot = slots.find(slot => slot.options.name === 'conversation.input.model.label')
+  check('the client half decorates the shipped picker with a label contribution',
+    labelSlot !== undefined && labelSlot.options.id === 'llm-manage-label',
+    labelSlot === undefined ? 'not registered' : JSON.stringify(labelSlot.options))
+  if (labelSlot !== undefined) {
+    // The ledger the label reads was cleared by the panel tests above, and a level is
+    // only ever claimed for committed use — so it is seeded the way the real one fills.
+    const LABELED = at(3)
+    for (let seq = 100; seq < 112; seq += 1) {
+      usageEmit('session/event', { id: 'sess-label' },
+        usageMessage(seq, LABELED, Date.now() - 60000, { inputTokens: 10, outputTokens: 2 }))
+    }
+    const host = window.document.createElement('div')
+    window.document.body.appendChild(host)
+    const labelRoot = createRoot(host)
+    const labelProps = {
+      provider: { id: ROUTE, name: ROUTE },
+      model: { id: LABELED, name: LABELED, badge: { text: { en: 'Preview', 'zh-cn': '预览' } } },
+      placement: 'option',
+      selected: false,
+    }
+    await act(async () => { labelRoot.render(React.createElement(labelSlot.Component, labelProps)) })
+    await waitFor(() => /Lv\.\d/.test(host.textContent))
+    check('the label draws the model name itself, so the fallback is not what shows',
+      host.querySelector('.llmm-label-name')?.textContent === LABELED,
+      host.textContent || 'empty label')
+    check('the label carries the level use has earned',
+      /Lv\.\d/.test(host.textContent), host.textContent || 'no level')
+    check('the label keeps the listing badge the owner would have drawn',
+      host.textContent.includes('Preview') || host.textContent.includes('预览'),
+      host.textContent || 'no badge')
+    check('the plugin stylesheet is mounted once in <head>, not per label',
+      window.document.querySelectorAll('style[data-llmm-style]').length === 1,
+      `${window.document.querySelectorAll('style[data-llmm-style]').length} sheet(s)`)
+
+    // The collapsed trigger carries health only: the owner budgeted its width, and the
+    // level is a detail worth the space inside the menu, not on the button.
+    await act(async () => {
+      labelRoot.render(React.createElement(labelSlot.Component, { ...labelProps, placement: 'trigger' }))
+      await waitFor(() => !/Lv\.\d/.test(host.textContent))
+    })
+    check('the collapsed trigger drops the level chip',
+      !/Lv\.\d/.test(host.textContent), host.textContent || 'empty label')
+    // A SECOND instance, mounted into its own root: re-rendering the first one would
+    // not re-run its effect, so only a real second mount can catch a sheet per label.
+    const second = window.document.createElement('div')
+    window.document.body.appendChild(second)
+    const secondRoot = createRoot(second)
+    await act(async () => { secondRoot.render(React.createElement(labelSlot.Component, labelProps)) })
+    await waitFor(() => second.querySelector('.llmm-label-name') !== null)
+    check('a second label instance reuses the mounted stylesheet',
+      window.document.querySelectorAll('style[data-llmm-style]').length === 1,
+      `${window.document.querySelectorAll('style[data-llmm-style]').length} sheet(s)`)
+
+    await act(async () => { secondRoot.unmount() })
+    second.remove()
+    await act(async () => { labelRoot.unmount() })
+    host.remove()
+  }
+}
+
+// ── the composer controller ─────────────────────────────────────────────────
+// The rail is additive: the editor keeps every shipped seat, and this layer reads the
+// same input state it publishes. What matters is that every shape comes from real
+// state (a decorative mode would lie while the session runs) and that each palette row
+// does the thing it names — a command palette whose actions are props-free is a mock.
+{
+  const railSlot = slots.find(slot => slot.options.name === 'conversation.input.right' && slot.options.id === 'llm-manage-rail')
+  check('the composer controls take the seat inside the card, before submit',
+    railSlot !== undefined && railSlot.options.order === 0,
+    railSlot === undefined ? 'not registered' : JSON.stringify(railSlot.options))
+  if (railSlot !== undefined) {
+    const MODEL = at(0)
+    const catalog = {
+      current: { provider: ROUTE, model: MODEL, reasoningEffort: 'high' },
+      groups: [{
+        id: ROUTE,
+        models: [{
+          id: MODEL,
+          reasoning: {
+            efforts: [
+              { id: 'low', name: 'Low' },
+              { id: 'high', name: 'High' },
+              { id: 'max', name: 'Max' },
+            ],
+          },
+        }],
+      }],
+    }
+    const selects = []
+    const loads = []
+    const submits = []
+    const drafts = []
+    const directories = {
+      directoryFor: () => ({
+        store: { subscribe: () => () => {}, getSnapshot: () => catalog },
+        load: () => { loads.push(1); return Promise.resolve() },
+        select: async selection => { selects.push(selection) },
+      }),
+    }
+    let inputState = { draft: '', attachmentIds: [], phase: 'plain', queue: [] }
+    let statusMap = new Map()
+    const controllerProps = {
+      sessionId: 'sess-controller',
+      useInput: selector => selector(inputState),
+      useSessionStatus: selector => selector(statusMap),
+      inputActions: {
+        submit: () => { submits.push(inputState.draft) },
+        setDraft: text => { drafts.push(text) },
+      },
+      modelDirectories: directories,
+    }
+    const host = window.document.createElement('div')
+    window.document.body.appendChild(host)
+    const railRoot = createRoot(host)
+    const renderRail = async () => {
+      await act(async () => {
+        railRoot.render(React.createElement(railSlot.Component, controllerProps))
+      })
+    }
+    const pressKey = async (key, init = {}) => {
+      await act(async () => {
+        window.document.dispatchEvent(new window.KeyboardEvent('keydown', {
+          key, bubbles: true, cancelable: true, ...init,
+        }))
+      })
+    }
+
+    await renderRail()
+    await waitFor(() => host.querySelector('.llmm-ctl') !== null)
+    check('an idle session collapses the controller to a hairline',
+      host.querySelector('.llmm-ctl')?.dataset.mode === 'idle',
+      host.querySelector('.llmm-ctl')?.dataset.mode ?? 'no rail')
+
+    inputState = { draft: 'hello', attachmentIds: [], phase: 'plain', queue: [] }
+    await renderRail()
+    check('a draft expands the controller into a meter',
+      host.querySelector('.llmm-ctl')?.dataset.mode === 'draft'
+        && /5/.test(host.querySelector('.llmm-ctl-text')?.textContent ?? ''),
+      host.querySelector('.llmm-ctl-text')?.textContent ?? 'no text')
+
+    statusMap = new Map([['sess-controller', { running: true, pendingInteraction: undefined, completionUnread: false }]])
+    await renderRail()
+    check('a running turn becomes a capsule with a clock',
+      host.querySelector('.llmm-ctl')?.dataset.mode === 'running'
+        && /0:0\d/.test(host.querySelector('.llmm-ctl-text')?.textContent ?? ''),
+      host.querySelector('.llmm-ctl-text')?.textContent ?? 'no text')
+
+    statusMap = new Map([['sess-controller', { running: false, pendingInteraction: { kind: 'question' }, completionUnread: false }]])
+    await renderRail()
+    check('a turn waiting on the user says so on the same line',
+      /等待|Waiting|waiting/i.test(host.querySelector('.llmm-ctl-text')?.textContent ?? ''),
+      host.querySelector('.llmm-ctl-text')?.textContent ?? 'no text')
+
+    statusMap = new Map()
+    inputState = { draft: 'ping', attachmentIds: [], phase: 'plain', queue: [] }
+    await renderRail()
+
+    check('the cluster holds no second level control: the trigger beside it already owns that fact',
+      host.querySelector('.llmm-ctl-chip') === null,
+      host.querySelector('.llmm-ctl-chip')?.textContent ?? 'no chip')
+    check('the cluster keeps the manager button and the shortcut hint',
+      host.querySelector('.llmm-ctl-icon[aria-label]') !== null
+        && host.querySelector('.llmm-ctl-key') !== null, 'missing pieces')
+
+    const openPalette = async () => {
+      await pressKey('k', { metaKey: true })
+      await waitFor(() => window.document.querySelector('.llmm-pal') !== null)
+      return window.document.querySelector('.llmm-pal')
+    }
+    const closePalette = async () => {
+      if (window.document.querySelector('.llmm-pal') === null) return
+      await pressKey('Escape')
+      await waitFor(() => window.document.querySelector('.llmm-pal') === null)
+    }
+    // React reads `value` from its own state, so a bare assignment never reaches
+    // onChange: drive the native setter and the input event, as a keyboard would.
+    const setQuery = async (text) => {
+      const field = window.document.querySelector('.llmm-pal-search')
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      await act(async () => {
+        setter.call(field, text)
+        field.dispatchEvent(new window.Event('input', { bubbles: true }))
+      })
+    }
+    const rowOf = pattern => Array.from(window.document.querySelectorAll('.llmm-pal-item'))
+      .find(row => pattern.test(row.textContent ?? ''))
+
+    const palette = await openPalette()
+    check('the shortcut opens the command palette over the composer', palette !== null, 'no palette')
+    const groupTitles = Array.from(palette.querySelectorAll('.llmm-pal-group')).map(node => node.textContent ?? '')
+    check('the palette groups its commands instead of stacking one flat list',
+      groupTitles.length >= 4 && /本会话|This session/.test(groupTitles[0] ?? ''),
+      groupTitles.join(' | '))
+    check('the palette takes typed input, not only arrow keys',
+      palette.querySelector('.llmm-pal-search') !== null, 'no search field')
+    const rootLabels = Array.from(palette.querySelectorAll('.llmm-pal-label')).map(node => node.textContent ?? '')
+    // The levels are one row that names the stop in force. Eight rows of stops used
+    // to outnumber every other command and pushed them off the first screen.
+    check('the level is one row naming the current stop, not eight rows of stops',
+      rootLabels.some(label => /档位|Level/.test(label) && /High/.test(label))
+        && !rootLabels.some(label => /^(Low|Max)$/.test(label.trim())),
+      rootLabels.join(' | '))
+
+    await pressKey('Enter')
+    check('Enter runs the highlighted command instead of submitting the draft',
+      submits.length === 1 && drafts.length === 0,
+      `${submits.length} submit(s), ${drafts.length} draft write(s)`)
+    const closedAfterRun = await waitFor(() => window.document.querySelector('.llmm-pal') === null)
+    check('the palette closes once a command has run', closedAfterRun, 'palette still open')
+
+    await openPalette()
+    await setQuery('probe')
+    const filtered = Array.from(window.document.querySelectorAll('.llmm-pal-label')).map(node => node.textContent ?? '')
+    check('typing narrows the list to the commands that answer to that word',
+      filtered.length >= 1 && filtered.length < rootLabels.length
+        && filtered.every(label => /探活|Probe/i.test(label)),
+      filtered.join(' | '))
+
+    await setQuery('zzzz')
+    check('a search that matches nothing says so instead of drawing an empty card',
+      window.document.querySelector('.llmm-pal-empty') !== null,
+      window.document.querySelector('.llmm-pal-empty')?.textContent ?? 'no empty state')
+
+    await setQuery('probe')
+    await pressKey('Escape')
+    check('Escape clears the search word before it closes the panel',
+      window.document.querySelector('.llmm-pal') !== null
+        && window.document.querySelector('.llmm-pal-search')?.value === '',
+      `open=${window.document.querySelector('.llmm-pal') !== null} value=${window.document.querySelector('.llmm-pal-search')?.value}`)
+    await closePalette()
+
+    await openPalette()
+    await act(async () => { rowOf(/档位|Level/).querySelector('.llmm-pal-run').click() })
+    const levelLabels = Array.from(window.document.querySelectorAll('.llmm-pal-label')).map(node => node.textContent ?? '')
+    check('the level row opens a page of the stops, automatic included',
+      levelLabels.some(label => /Low/.test(label))
+        && levelLabels.some(label => /自动|Auto/.test(label))
+        && window.document.querySelector('.llmm-pal-back') !== null,
+      levelLabels.join(' | '))
+    const currentRows = Array.from(window.document.querySelectorAll('.llmm-pal-item'))
+      .filter(row => /当前|current/.test(row.textContent ?? ''))
+    check('exactly one stop is marked as the one in force',
+      currentRows.length === 1 && /High/.test(currentRows[0]?.textContent ?? ''),
+      currentRows.map(row => row.textContent).join(' | ') || 'none marked')
+
+    await act(async () => { rowOf(/Low/)?.querySelector('.llmm-pal-run')?.click() })
+    await waitFor(() => selects.length > 0)
+    check('a level row commits that level through the shipped directory',
+      selects[0]?.reasoningEffort === 'low' && selects[0]?.model === MODEL,
+      JSON.stringify(selects[0] ?? null))
+    await closePalette()
+
+    // The Host is held open on purpose: a command that takes a round trip has to
+    // look like work in progress, and the rest of the list has to stop accepting
+    // clicks while it runs.
+    await openPalette()
+    const originalFetch = globalThis.fetch
+    const asked = []
+    // One resolver per parked request: holding the gate on a single slot would
+    // park the probe and hand the release to whichever request came last, so the
+    // command under test would never finish.
+    const parked = []
+    let gate = true
+    globalThis.fetch = async (request, init) => {
+      try { asked.push(JSON.parse(init?.body ?? '{}').action) } catch { asked.push('?') }
+      // Only while the gate is shut: opening it lets late requests (the harness
+      // fetching a stylesheet, say) through instead of stranding them too.
+      if (gate) await new Promise(resolve => { parked.push(resolve) })
+      return originalFetch(request, init)
+    }
+    await act(async () => { rowOf(/探活|Probe/)?.querySelector('.llmm-pal-run')?.click() })
+    await waitFor(() => window.document.querySelector('.llmm-pal-spin') !== null)
+    const spinnerWhileBusy = window.document.querySelector('.llmm-pal-spin') !== null
+    const lockedRows = Array.from(window.document.querySelectorAll('.llmm-pal-run'))
+      .filter(button => button.disabled === true).length
+    check('a command in flight shows work instead of a dead row', spinnerWhileBusy, 'no spinner')
+    check('the rows that are not running are locked while one runs', lockedRows >= 3, `${lockedRows} locked`)
+    await act(async () => { gate = false; parked.splice(0).forEach(resolve => resolve()) })
+    await waitFor(() => window.document.querySelector('.llmm-pal-spin') === null)
+    await waitFor(() => loads.length > 0)
+    globalThis.fetch = originalFetch
+    check('the probe row asks the Host for a real deep probe', asked[0] === 'probe', asked.join(','))
+    check('the probe reloads the catalogue so the level seat keeps up', loads.length > 0, `${loads.length} load(s)`)
+    check('the answer lands on the row that was asked',
+      /探活完成|probe finished/i.test(window.document.querySelector('.llmm-pal-ok')?.textContent ?? ''),
+      window.document.querySelector('.llmm-pal-ok')?.textContent ?? 'no answer')
+
+    const forced = []
+    globalThis.fetch = async (request, init) => {
+      let body = {}
+      try { body = JSON.parse(init?.body ?? '{}') } catch { body = {} }
+      if (body.action === 'snapshot') forced.push(body.forceDirectory === true)
+      return originalFetch(request, init)
+    }
+    await act(async () => { rowOf(/重拉|Refresh/).querySelector('.llmm-pal-run').click() })
+    await waitFor(() => forced.length > 0)
+    globalThis.fetch = originalFetch
+    check('the refresh row asks the Host to bypass its cached catalogue',
+      forced.includes(true), JSON.stringify(forced))
+    // A command in flight disables the other rows on purpose, so the next click has
+    // to wait for this one to land — otherwise the clear row is still locked and
+    // the failure reads as "clear is broken" instead of "clear was not asked yet".
+    await waitFor(() => window.document.querySelector('.llmm-pal-spin') === null)
+    await closePalette()
+
+    await pressKey('k', { metaKey: true })
+    await waitFor(() => window.document.querySelector('.llmm-pal') !== null)
+    await pressKey('Escape')
+    const closedByEscape = await waitFor(() => window.document.querySelector('.llmm-pal') === null)
+    check('Escape closes the palette and leaves the draft alone',
+      closedByEscape && drafts.length === 0,
+      `${drafts.length} draft write(s)`)
+
+    await pressKey('k', { metaKey: true })
+    await waitFor(() => window.document.querySelector('.llmm-pal') !== null)
+    await act(async () => {
+      window.document.querySelector('.llmm-pal-list')?.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }))
+    })
+    const survivesInside = window.document.querySelector('.llmm-pal') !== null
+    await act(async () => {
+      window.document.body.dispatchEvent(new window.MouseEvent('pointerdown', { bubbles: true }))
+    })
+    const closedByOutside = await waitFor(() => window.document.querySelector('.llmm-pal') === null)
+    check('the palette closes when the pointer goes anywhere else, and not when it stays in',
+      survivesInside && closedByOutside,
+      `inside=${survivesInside} outside=${closedByOutside}`)
+
+    await pressKey('k', { metaKey: true })
+    await waitFor(() => window.document.querySelector('.llmm-pal') !== null)
+    await act(async () => { rowOf(/清空|Clear/)?.querySelector('.llmm-pal-run')?.click() })
+    check('the clear row empties the draft through the owner action',
+      drafts.length === 1 && drafts[0] === '', JSON.stringify(drafts))
+
+    // The dialog has to be reachable while the shipped picker owns the model
+    // seat, where none of our picker surfaces are mounted at all — that is the
+    // default mode, so an entry only the picker carries would be unreachable.
+    const mgSlot = slots.find(candidate => candidate.options.id === 'llm-manage-manager')
+    const mgShell = window.document.createElement('div')
+    window.document.body.appendChild(mgShell)
+    const mgShellRoot = createRoot(mgShell)
+    // Titles come from the Session list projection, so the harness answers it the way
+    // the shell does: one row per Session, with the label the sidebar would draw.
+    const sessionFace = selector => selector({
+      byId: {
+        'sess-seed-a': { id: 'sess-seed-a', displayTitle: 'Retry storm on the API' },
+        'sess-seed-b': { id: 'sess-seed-b', title: 'Batch import' },
+      },
+    })
+    await act(async () => { mgShellRoot.render(React.createElement(mgSlot.Component, { useSessions: sessionFace })) })
+    await pressKey('m', { metaKey: true, shiftKey: true })
+    const openedByShortcut = await waitFor(() => mgShell.querySelector('.llmm-dlg') !== null)
+    check('the manager opens from the session shortcut without our picker mounted',
+      openedByShortcut, 'no dialog')
+    await act(async () => { mgShell.querySelector('.llmm-dlg-head .llmm-dlg-close')?.click() })
+    const closedByItsButton = await waitFor(() => mgShell.querySelector('.llmm-dlg') === null)
+    check('the dialog closes from its own header button', closedByItsButton, 'still open')
+
+    await act(async () => {
+      window.document.querySelector('.llmm-ctl-icon[aria-label]')?.click()
+    })
+    const openedByRail = await waitFor(() => mgShell.querySelector('.llmm-dlg') !== null)
+    check('the always-visible rail button opens the dialog in one click', openedByRail, 'no dialog')
+    await act(async () => { mgShell.querySelector('.llmm-dlg-head .llmm-dlg-close')?.click() })
+    await waitFor(() => mgShell.querySelector('.llmm-dlg') === null)
+
+    await pressKey('k', { metaKey: true })
+    await waitFor(() => window.document.querySelector('.llmm-pal') !== null)
+    await act(async () => { rowOf(/模型管理|Manage models/)?.querySelector('.llmm-pal-run')?.click() })
+    const openedByPalette = await waitFor(() => mgShell.querySelector('.llmm-dlg') !== null)
+    check('the palette carries the same way into the dialog', openedByPalette, 'no dialog')
+    await act(async () => { mgShell.querySelector('.llmm-dlg-head .llmm-dlg-close')?.click() })
+    await waitFor(() => mgShell.querySelector('.llmm-dlg') === null)
+
+    // A row that names a tab has to land on that tab: opening on Catalog and
+    // leaving the user to click again answers a different question than the one
+    // the row promises.
+    await pressKey('k', { metaKey: true })
+    await waitFor(() => window.document.querySelector('.llmm-pal') !== null)
+    await act(async () => { rowOf(/最近的故障切换|Recent failovers/)?.querySelector('.llmm-pal-run')?.click() })
+    const landedOnFailover = await waitFor(() => {
+      const selected = mgShell.querySelector('.llmm-dlg-tabs .llmm-tab[aria-selected="true"]')
+      return selected !== null && /故障切换|Failover/.test(selected.textContent ?? '')
+    })
+    check('a palette row that names a tab opens the dialog on that tab',
+      landedOnFailover,
+      mgShell.querySelector('.llmm-dlg-tabs .llmm-tab[aria-selected="true"]')?.textContent ?? 'no tab')
+    await act(async () => { mgShell.querySelector('.llmm-dlg-head .llmm-dlg-close')?.click() })
+    await waitFor(() => mgShell.querySelector('.llmm-dlg') === null)
+    await act(async () => { mgShellRoot.unmount() })
+    mgShell.remove()
+
+    await pressKey('k', { metaKey: true })
+    await waitFor(() => window.document.querySelector('.llmm-pal') !== null)
+    await act(async () => { railRoot.unmount() })
+    host.remove()
+    const cleanedUp = await waitFor(() => window.document.querySelector('.llmm-pal') === null)
+    check('the controller cleans its portal up when it goes away', cleanedUp, 'palette left behind')
+  }
+}
+
+
+// ── the model manager dialog ─────────────────────────────────────────────────
+// The dialog is the only surface that drafts a fallback policy and a manual
+// proficiency together, so these assertions are about the SAVE boundary: what
+// lands immediately (pins), what waits for the button (the chain, the levels),
+// and what a cancel must leave untouched.
+const managerSlot = slots.find(s => s.options.id === 'llm-manage-manager')
+check('the manager dialog rides the shell overlay', managerSlot !== undefined && managerSlot.options.order === 30,
+  managerSlot === undefined ? 'not registered' : `order ${managerSlot.options.order}`)
+
+if (managerSlot !== undefined) {
+  const mgContainer = window.document.createElement('div')
+  window.document.body.appendChild(mgContainer)
+  const mgRoot = createRoot(mgContainer)
+  // The Session list the shell would project: one row per Session. `sess-seed-c` is
+  // deliberately absent, because a Session the shell no longer lists still has a
+  // history row and must still be identifiable.
+  const sessionRows = selector => selector({
+    byId: {
+      'sess-seed-a': { id: 'sess-seed-a', displayTitle: 'Retry storm on the API' },
+      'sess-seed-b': { id: 'sess-seed-b', title: 'Batch import' },
+    },
+  })
+  await act(async () => { mgRoot.render(React.createElement(managerSlot.Component, { useSessions: sessionRows })) })
+  check('the manager renders nothing until something opens it',
+    mgContainer.querySelector('.llmm-dlg') === null)
+
+  const dlg = () => mgContainer.querySelector('.llmm-dlg')
+  const tabs = () => Array.from(mgContainer.querySelectorAll('.llmm-dlg-tabs .llmm-tab'))
+  const rows = () => Array.from(mgContainer.querySelectorAll('.llmm-mg-item'))
+  const rowFor = (model) => rows().find(row => (row.querySelector('.llmm-mg-name')?.textContent ?? '') === model)
+  const rowActs = (model) => Array.from(rowFor(model)?.querySelectorAll('.llmm-mg-acts button') ?? [])
+  const saveButton = () => mgContainer.querySelector('.llmm-dlg-foot .llmm-dlg-btn-primary')
+  const cancelButton = () => Array.from(mgContainer.querySelectorAll('.llmm-dlg-foot .llmm-dlg-btn'))
+    .find(button => !button.className.includes('primary') && !button.className.includes('danger'))
+  // hostCall returns the raw Response; the state lives in its JSON body.
+  const hostJson = async (body) => (await hostCall(body)).json()
+  const snapNow = async () => (await hostJson({ action: 'snapshot' })).value
+  const modelNow = async (model) => (await snapNow()).models.find(entry => entry.model === model)
+  // The picker block above unmounted its instance, so this block mounts its own:
+  // the footer entry is the only public way into the dialog, which makes the
+  // path worth exercising rather than reaching into the store behind it.
+  const mgPickerContainer = window.document.createElement('div')
+  window.document.body.appendChild(mgPickerContainer)
+  const mgPickerRoot = createRoot(mgPickerContainer)
+  await act(async () => { mgPickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+  const openFromPicker = async () => {
+    await act(async () => {
+      mgPickerContainer.querySelector('.llmm-trigger')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenu() !== null)
+    })
+    await act(async () => {
+      pickerMenuQuery('.llmm-foot-manage')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => dlg() !== null)
+    })
+  }
+
+  await openFromPicker()
+  check('the picker footer opens the manager', dlg() !== null)
+  check('the manager is a labelled modal dialog',
+    dlg()?.getAttribute('role') === 'dialog' && dlg()?.getAttribute('aria-modal') === 'true'
+    && (dlg()?.getAttribute('aria-label') ?? '').length > 0,
+    `role=${dlg()?.getAttribute('role')} label=${dlg()?.getAttribute('aria-label')}`)
+  check('the manager offers the four tabs the prototype names', tabs().length === 4,
+    tabs().map(tab => tab.textContent).join(' / '))
+  check('the catalog tab is the one it opens on', tabs()[0]?.getAttribute('aria-selected') === 'true')
+  check('the catalog lists every model the snapshot carries', rows().length === MODELS.length,
+    `${rows().length} row(s) for ${MODELS.length} model(s)`)
+
+  const firstModel = MODELS[0]
+  const acts = rowActs(firstModel)
+  check('a row carries the four tools: pin, star, visibility and pulse', acts.length === 4,
+    `${acts.length} action(s)`)
+  check('the row tools are icon buttons with real accessible names',
+    acts.every(button => (button.textContent ?? '').trim() === ''
+      && (button.getAttribute('aria-label') ?? '').length > 0),
+    JSON.stringify(acts.map(button => button.getAttribute('aria-label'))))
+
+  // Pins are NOT drafted: they already behave immediately in the panel, so the
+  // dialog must not introduce a second, contradictory behaviour for the same list.
+  const pinLabelBefore = acts[0].getAttribute('aria-label') ?? ''
+  await act(async () => {
+    acts[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => (rowActs(firstModel)[0]?.getAttribute('aria-label') ?? '') !== pinLabelBefore)
+  })
+  const pinnedNow = (await modelNow(firstModel))?.routes?.find(route => route.route === ROUTE)?.pinned === true
+  check('pinning a model in the dialog lands immediately', pinnedNow,
+    `aria-label=${rowActs(firstModel)[0]?.getAttribute('aria-label')}`)
+
+  // A manual proficiency is drafted, so it must not reach the Host until save.
+  await act(async () => {
+    rowFor(firstModel)?.querySelector('.llmm-mg-main')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-mg-levels') !== null)
+  })
+  const levelButtons = () => Array.from(mgContainer.querySelectorAll('.llmm-mg-levels .llmm-mg-lvbtn'))
+  check('the expanded row offers a proficiency editor with an automatic stop',
+    levelButtons().length === 8, `${levelButtons().length} button(s)`)
+  await act(async () => {
+    levelButtons()[3].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-dlg-dirty') !== null)
+  })
+  check('editing the proficiency is drafted, not written', mgContainer.querySelector('.llmm-dlg-dirty') !== null,
+    (await modelNow(firstModel))?.routes?.[0]?.usage?.level ?? 'no level')
+  const levelBeforeSave = (await modelNow(firstModel))?.routes?.find(route => route.route === ROUTE)?.usage?.level
+  check('the draft leaves the Host alone until save', levelBeforeSave !== 3, `level=${levelBeforeSave}`)
+
+  await act(async () => {
+    saveButton().dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-dlg-dirty') === null)
+  })
+  {
+    const deadline = Date.now() + 3000
+    while (Date.now() < deadline) {
+      if ((await modelNow(firstModel))?.routes?.find(route => route.route === ROUTE)?.usage?.level === 3) break
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+  }
+  const levelAfterSave = (await modelNow(firstModel))?.routes?.find(route => route.route === ROUTE)?.usage?.level
+  check('saving writes the drafted proficiency', levelAfterSave === 3, `level=${levelAfterSave}`)
+  check('a save that landed says so', (mgContainer.querySelector('.llmm-dlg-note')?.textContent ?? '').length > 0,
+    mgContainer.querySelector('.llmm-dlg-note')?.textContent ?? 'no note')
+
+  // Cancel has to mean cancel: the second edit must not survive the discard path.
+  await act(async () => {
+    levelButtons()[5].dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-dlg-dirty') !== null)
+  })
+  await act(async () => {
+    cancelButton()?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-dlg-ask') !== null)
+  })
+  check('cancelling with unsaved edits asks before throwing them away',
+    mgContainer.querySelector('.llmm-dlg-ask') !== null)
+  await act(async () => {
+    mgContainer.querySelector('.llmm-dlg-ask .llmm-dlg-btn-danger')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => dlg() === null)
+  })
+  const levelAfterDiscard = (await modelNow(firstModel))?.routes?.find(route => route.route === ROUTE)?.usage?.level
+  check('discarding a draft writes nothing', dlg() === null && levelAfterDiscard === 3,
+    `level=${levelAfterDiscard}`)
+
+  // ── the failover policy tab ──
+  await openFromPicker()
+  await act(async () => {
+    tabs()[1]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-fb-toggle') !== null)
+  })
+  check('the failover tab exposes the enable switch', mgContainer.querySelector('.llmm-fb-toggle input') !== null)
+  const candidate = `${ROUTE}/${MODELS[1]}`
+  await act(async () => {
+    mgContainer.querySelector('.llmm-fb-pick')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-fb-pop') !== null)
+  })
+  const pickOptions = () => [...mgContainer.querySelectorAll('.llmm-fb-pop .llmm-fb-opt')]
+  check('the candidate list names a status for every model',
+    pickOptions().length > 0 && pickOptions().every(option => option.querySelector('.llmm-dot') !== null && option.querySelector('.llmm-fb-opt-flag')?.textContent !== ''),
+    `${pickOptions().length} option(s), flags=${pickOptions().map(option => option.querySelector('.llmm-fb-opt-flag')?.textContent).join('|')}`)
+  check('the candidate list leads with a route that answered',
+    pickOptions()[0] !== undefined && pickOptions()[0].classList.contains('llmm-fb-opt-bad') === false,
+    pickOptions()[0]?.className ?? 'no options')
+  await act(async () => {
+    const search = mgContainer.querySelector('.llmm-fb-pop-search')
+    if (search !== null) {
+      const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+      setValue.call(search, MODELS[1])
+      search.dispatchEvent(new window.Event('input', { bubbles: true }))
+      await waitFor(() => pickOptions().length > 0 && pickOptions().length < 80)
+    }
+  })
+  const narrowed = pickOptions()
+  check('searching the candidate list narrows it', narrowed.length > 0 && narrowed.length < 80,
+    `${narrowed.length} of 80`)
+  await act(async () => {
+    const target = pickOptions().find(option => option.textContent.includes(MODELS[1]))
+    target?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  check('picking a candidate names it on the trigger',
+    mgContainer.querySelector('.llmm-fb-pick-label')?.textContent === candidate,
+    mgContainer.querySelector('.llmm-fb-pick-label')?.textContent ?? 'no label')
+  check('picking a candidate closes the list', mgContainer.querySelector('.llmm-fb-pop') === null,
+    mgContainer.querySelector('.llmm-fb-pop') === null ? 'closed' : 'still open')
+  await act(async () => {
+    mgContainer.querySelector('.llmm-fb-commit')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelectorAll('.llmm-fb-item').length === 1)
+  })
+  check('a candidate can be added to the chain', mgContainer.querySelectorAll('.llmm-fb-item').length === 1,
+    `${mgContainer.querySelectorAll('.llmm-fb-item').length} item(s)`)
+  check('the chain is drafted until saved',
+    (await hostJson({ action: 'fallbackConfig' })).value.chain.length === 0,
+    `chain=${JSON.stringify((await hostJson({ action: 'fallbackConfig' })).value.chain)}`)
+  await act(async () => {
+    mgContainer.querySelector('.llmm-fb-check .llmm-dlg-btn')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelectorAll('.llmm-fb-results li').length > 0)
+  })
+  check('checking the chain reports one line per candidate',
+    mgContainer.querySelectorAll('.llmm-fb-results li').length === 1,
+    mgContainer.querySelector('.llmm-fb-results')?.textContent ?? 'no results')
+  await act(async () => {
+    saveButton().dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-dlg-dirty') === null)
+  })
+  const savedChain = (await hostJson({ action: 'fallbackConfig' })).value.chain
+  check('saving writes the drafted chain', savedChain.length === 1 && savedChain[0] === candidate,
+    `${JSON.stringify(savedChain)} want=${candidate} err=${mgContainer.querySelector('.llmm-dlg-err')?.textContent ?? '-'} note=${mgContainer.querySelector('.llmm-dlg-note')?.textContent ?? '-'}`)
+
+  // ── the two surfaces that read as broken without their own chrome ──
+  const sheetText = () => document.querySelector('style[data-llmm-style]')?.textContent ?? ''
+  check('the shortcut hint is standing, not hover-only',
+    /\.llmm-ctl-key\{[^}]*opacity:\.75/.test(sheetText()) && !/\.llmm-ctl-key\{[^}]*opacity:0/.test(sheetText()),
+    /opacity:\.75/.test(sheetText()) ? 'standing' : 'hover-gated')
+  check('dialog buttons carry their own chrome instead of the browser face',
+    /\.llmm-dlg-btn\{[^}]*border:0\.5px solid var\(--dsw-alias-border-l3\)/.test(sheetText())
+      && /\.llmm-dlg-btn-primary\{[^}]*background:var\(--dsw-alias-button-primary-fill\)/.test(sheetText()),
+    /\.llmm-dlg-btn\{[^}]*border:0\.5px solid/.test(sheetText()) ? 'chrome' : 'browser default')
+
+  // ── the probe log tab ──
+  await act(async () => {
+    tabs()[3]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => mgContainer.querySelector('.llmm-mg-record') !== null
+      || mgContainer.querySelector('.llmm-mg-empty') !== null)
+  })
+  const logRendered = mgContainer.querySelectorAll('.llmm-mg-record').length
+  check('the probe log tab renders what the Host recorded',
+    mgContainer.querySelector('.llmm-mg-record') !== null || mgContainer.querySelector('.llmm-mg-empty') !== null,
+    `${logRendered} record(s)`)
+
+  // ── the switch history tab ──
+  // The question it answers is "which model keeps failing", so the aggregate comes
+  // first and is ordered by that count; the raw events sit below it as evidence.
+  // A Host answer lands in a promise, so the render it triggers is not visible to a
+  // synchronous predicate poll: give the request its tick before reading the DOM.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
+  await act(async () => {
+    tabs()[2]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  await settle()
+  const swRows = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-models .llmm-sw-row'))
+  const swEvents = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-event'))
+  check('the switch history tab aggregates the models that triggered a switch',
+    swRows().length === 2, `${swRows().length} model row(s): ${swRows().map(r => r.textContent).join(' | ')}`)
+  check('the model that keeps failing is named first, with its count',
+    /seeded-flaky/.test(swRows()[0]?.textContent ?? '')
+      && /^2$/.test((swRows()[0]?.querySelector('.llmm-sw-count')?.textContent ?? '').trim()),
+    swRows()[0]?.textContent ?? 'no rows')
+  check('every aggregate separates the switches that recovered from those that did not',
+    swRows().every(row => /已恢复|recovered/.test(row.textContent ?? '')
+      && /仍未恢复|still failed/.test(row.textContent ?? '')), swRows()[0]?.textContent ?? 'no rows')
+  check('the raw switches are kept beside the aggregate',
+    swEvents().length === 3 && swEvents().every(row => row.textContent.includes('\u2192')),
+    `${swEvents().length} event(s)`)
+  check('the tab says what it records and why it can be cleared',
+    /只记录已经证实的切换|Only proven switches/.test(mgContainer.querySelector('.llmm-sw-note')?.textContent ?? ''),
+    mgContainer.querySelector('.llmm-sw-note')?.textContent ?? 'no note')
+  // A switch happened inside a Session, and the row is the only place a reader can go
+  // and look at it: the label comes from the shipped projection (the log stores the id
+  // it saw, not a name that may since have been renamed).
+  const chips = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-event .llmm-sw-session'))
+  check('every switch names the Session it happened in',
+    chips().length === 3, `${chips().length} session chip(s) of 3 event(s)`)
+  check('the Session label is the name the shell shows, not the raw id',
+    (chips()[0]?.textContent ?? '') === 'Retry storm on the API',
+    chips()[0]?.textContent ?? 'no chip')
+  check('a Session the shell no longer lists still identifies itself by id',
+    (chips()[2]?.textContent ?? '') === 'sess-seed-c'.slice(0, 8),
+    chips()[2]?.textContent ?? 'no chip')
+  check('the aggregate counts the Sessions a model failed in',
+    /2\s*(个会话|sessions)/.test(swRows()[0]?.textContent ?? ''),
+    swRows()[0]?.textContent ?? 'no rows')
+
+  // One navigation action, the same call the shipped sidebar makes. Leaving also
+  // closes the dialog, so a reader lands on the Session rather than behind a modal.
+  await act(async () => {
+    chips()[0]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await settle()
+  })
+  check('clicking the Session opens it and closes the manager behind it',
+    navigations.length === 1 && navigations[0] === 'sess-seed-a' && dlg() === null,
+    `${JSON.stringify(navigations)}, dialog=${dlg() === null ? 'closed' : 'open'}`)
+
+  // A client without the workspace face has no navigation to offer. The name must
+  // then read as a fact, not as a control that answers nothing.
+  await act(async () => {
+    mgRoot.render(React.createElement(managerSlot.Component, {
+      useSessions: sessionRows,
+      canOpenSession: () => false,
+    }))
+    await settle()
+  })
+  await openFromPicker()
+  await act(async () => {
+    tabs()[2]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await settle()
+  })
+  check('without a navigator the Session is named, not offered as a dead link',
+    chips()[0]?.tagName === 'SPAN' && /flat/.test(chips()[0]?.className ?? ''),
+    `${chips()[0]?.tagName ?? 'missing'} ${chips()[0]?.className ?? ''}`)
+  await act(async () => {
+    mgContainer.querySelector('.llmm-sw-clear')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  await settle()
+  const afterClear = (await hostJson({ action: 'failoverHistory' })).value
+  check('the history can be cleared, and clearing it is durable',
+    mgContainer.querySelector('.llmm-sw-event') === null && afterClear.records.length === 0,
+    `${afterClear.records.length} record(s) left on the Host`)
+
+  // ── taking a model out of the catalog ──
+  // A model the gateway has withdrawn cannot be usefully listed: it occupies a row,
+  // it can be picked as a fallback target, and every probe of it is a known failure.
+  await act(async () => {
+    tabs()[0]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  await settle()
+  check('the catalog comes back when its tab is chosen again', rows().length > 0, `${rows().length} row(s)`)
+  const doomed = MODELS[0]
+  await act(async () => {
+    rowFor(doomed)?.querySelector('.llmm-mg-main')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  check('an expanded row offers to take the model out of the catalog',
+    rowFor(doomed)?.querySelector('.llmm-mg-remove') !== null, 'no removal control')
+  await act(async () => {
+    rowFor(doomed)?.querySelector('.llmm-mg-remove')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  await settle()
+  check('removing a model drops its row', rowFor(doomed) === undefined,
+    `${rows().length} row(s) left of ${MODELS.length}`)
+  check('the removal is undone from the same tab instead of being buried elsewhere',
+    (mgContainer.querySelector('.llmm-mg-removed')?.textContent ?? '').includes(doomed),
+    mgContainer.querySelector('.llmm-mg-removed')?.textContent ?? 'no removed section')
+  await act(async () => {
+    mgContainer.querySelector('.llmm-mg-restore')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  await settle()
+  check('restoring puts the row back', rowFor(doomed) !== undefined && rows().length === MODELS.length,
+    `${rows().length} row(s) for ${MODELS.length} model(s)`)
+
+  await act(async () => {
+    dlg()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await waitFor(() => dlg() === null)
+  })
+  check('Escape closes the manager', dlg() === null)
+
+  // A host that booted before these actions existed is a state this plugin has
+  // actually been in: a browser refresh reloads the client half, the process
+  // keeps the copy it started with. The dialog must name that instead of
+  // presenting an empty policy as if nothing were configured.
+  const healthyFetch = globalThis.fetch
+  const staleCalls = []
+  globalThis.fetch = async (url, init) => {
+    const action = String(url).includes('llm-manage') ? JSON.parse(init?.body ?? '{}').action : ''
+    staleCalls.push(action)
+    if (action === 'fallbackConfig') {
+      return {
+        ok: false,
+        status: 400,
+        json: async () => ({ ok: false, message: 'unknown action "fallbackConfig"' }),
+      }
+    }
+    return healthyFetch(url, init)
+  }
+  if (pickerMenu() !== null) {
+    await act(async () => {
+      mgPickerContainer.querySelector('.llmm-trigger')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenu() === null)
+    })
+  }
+  await openFromPicker()
+  // The notice arrives from a rejected request, so it lands a tick after mount.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 30)) })
+  const staleNotice = await waitFor(() => mgContainer.querySelector('.llmm-dlg-stale') !== null, 2000)
+  check('a stale host is named rather than shown as an empty policy', staleNotice,
+    mgContainer.querySelector('.llmm-dlg-stale')?.textContent
+      ?? `open=${mgContainer.querySelector('.llmm-dlg') !== null} calls=${staleCalls.join(',')}`)
+  globalThis.fetch = healthyFetch
+  await act(async () => {
+    mgContainer.querySelector('.llmm-dlg-head .llmm-dlg-close')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => dlg() === null)
+  })
+
+  // Re-pulling belongs at the end of this block: it changes what the catalogue says
+  // about a model, and every assertion above describes the catalogue as the gateway
+  // first listed it.
+  await openFromPicker()
+  const pullButton = () => mgContainer.querySelector('.llmm-dlg-head .llmm-dlg-pull')
+  const stampLines = () => Array.from(mgContainer.querySelectorAll('.llmm-mg-dirs .llmm-mg-dir'))
+  // Only routes that actually answered get a stamp. The built-in and adapter routes
+  // have no directory endpoint at all: reporting that once per route turned one fact
+  // into a wall of "unavailable", so the count is pinned to the readable routes and
+  // the line is forbidden from apologising for the rest.
+  const readableRoutes = (await snapNow()).directory.filter(entry => entry.ok === true)
+  const stampText = () => mgContainer.querySelector('.llmm-mg-dirs')?.textContent ?? ''
+  check('the catalog says which directory it read and how old that reading is',
+    stampLines().length > 0 && stampLines().length === readableRoutes.length,
+    `${stampLines().length} stamp(s) of ${readableRoutes.length} readable route(s)`)
+  check('a route with no directory endpoint is left out, not reported as a failure',
+    stampLines().length === readableRoutes.length && !/不可用|unavailable/i.test(stampText()),
+    `stamps=${stampLines().length}/${readableRoutes.length} text=${stampText().slice(0, 120)}`)
+  check('the header offers a re-pull, named for a screen reader',
+    pullButton() !== null && (pullButton().getAttribute('aria-label') ?? '').length > 0,
+    pullButton() === null ? 'no button' : pullButton().getAttribute('aria-label'))
+
+  // The directory has a 30-minute cache, so "did this bypass it" is only provable at
+  // the request. The same wrapper makes the gateway answer as if a model had been
+  // retired, which is the situation the control exists for.
+  const truthFetch = globalThis.fetch
+  const listed = (await snapNow()).models.filter(entry => entry.status !== 'retired')
+  const dropped = listed[listed.length - 1].model
+  const pulls = []
+  let dropNow = false
+  globalThis.fetch = async (request, init) => {
+    let body = {}
+    try { body = JSON.parse(init?.body ?? '{}') } catch { body = {} }
+    if (body.action === 'snapshot') pulls.push(body.forceDirectory === true)
+    let url = ''
+    try { url = typeof request === 'string' ? request : request?.url ?? String(request) } catch { url = '' }
+    if (dropNow !== true || !url.includes('/models')) return truthFetch(request, init)
+    const response = await truthFetch(request, init)
+    const parsed = await response.json().catch(() => null)
+    if (parsed === null) return response
+    const source = Array.isArray(parsed.data) ? parsed.data : Array.isArray(parsed.models) ? parsed.models : []
+    const kept = source.filter(row => (typeof row === 'string' ? row : row?.id) !== dropped)
+    return new Response(JSON.stringify({ ...parsed, data: kept }),
+      { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+  dropNow = true
+  await act(async () => { pullButton()?.dispatchEvent(new window.MouseEvent('click', { bubbles: true })) })
+  const pullSaid = await waitFor(() => {
+    const text = mgContainer.querySelector('.llmm-dlg-note')?.textContent ?? ''
+    return /重新拉取|Re-pulled/i.test(text)
+  }, 8000)
+  const pullNote = mgContainer.querySelector('.llmm-dlg-note')?.textContent ?? ''
+  globalThis.fetch = truthFetch
+  dropNow = false
+  check('re-pulling bypasses the cached directory read',
+    pulls.includes(true), JSON.stringify(pulls))
+  const pullErr = mgContainer.querySelector('.llmm-dlg-err')?.textContent ?? ''
+  check('re-pulling reports what came back', pullSaid,
+    `note=${pullNote === '' ? 'none' : pullNote} err=${pullErr === '' ? 'none' : pullErr} reads=${JSON.stringify(pulls)}`)
+  check('a model the gateway stopped listing is named, not counted',
+    pullNote.includes(dropped), `note=${pullNote} dropped=${dropped}`)
+
+  await act(async () => { mgRoot.unmount() })
+  await act(async () => { mgPickerRoot.unmount() })
+  mgPickerContainer.remove()
+  mgContainer.remove()
 }
 
 await act(async () => { root.unmount() })

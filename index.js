@@ -37,6 +37,8 @@ const STORE_VERSION = 1
 /** Upper bound on retained recent-use rows, newest first. */
 const LEVEL_LIMIT = 12
 const RECENT_LIMIT = 40
+/** How many fallback candidates a chain may hold; the manager caps its list here. */
+const FALLBACK_LIMIT = 12
 
 /** Upper bound on retained health rows so one huge catalog cannot grow the file without end. */
 const HEALTH_LIMIT = 4000
@@ -101,9 +103,6 @@ const SEED_MAX_PASSES = 40
 
 /** How long a model marked quota-exhausted is skipped by the fallback chain. */
 const QUOTA_COOLDOWN_MS = 30 * 60 * 1000
-
-/** How long a recorded model override waits for the retry that consumes it. */
-const OVERRIDE_TTL_MS = 30 * 1000
 
 /** Automatic model switches allowed per session and turn before the turn is left to fail. */
 const MAX_FALLBACKS_PER_TURN = 3
@@ -338,7 +337,7 @@ function heatOf(days, today) {
  * @param {number} now - current epoch milliseconds.
  * @returns {object} the derived view.
  */
-function usageView(entry, now) {
+function usageView(entry, now, manual) {
   const days = entry?.days ?? {}
   const uses = entry?.uses ?? 0
   const today = dayIndexOf(dayKeyOf(now))
@@ -346,6 +345,11 @@ function usageView(entry, now) {
   for (let index = 0; index < LEVEL_STEPS.length; index += 1) {
     if (uses >= LEVEL_STEPS[index]) level = index + 1
   }
+  // A manual proficiency is a statement the user made, so it wins over what the
+  // counters imply — while the counters stay visible beside it, because "I know this
+  // model is my main one" and "I have called it 12 times" are different facts.
+  const manualLevel = Number.isInteger(manual) && manual >= 1 && manual <= LEVEL_STEPS.length ? manual : undefined
+  if (manualLevel !== undefined) level = manualLevel
   const floor = LEVEL_STEPS[level - 1]
   const ceiling = LEVEL_STEPS[level]
   const recent7 = windowCount(days, today, 0)
@@ -358,6 +362,8 @@ function usageView(entry, now) {
     firstAt: entry?.firstAt ?? 0,
     lastAt: entry?.lastAt ?? 0,
     level,
+    /** Whether this level was set by hand rather than derived from the counters. */
+    manual: manualLevel !== undefined,
     /** Round-trips needed for the next level, or 0 when the model is maxed. */
     nextAt: ceiling ?? 0,
     /** Share of the way to the next level, 0..1; 1 when maxed. */
@@ -422,6 +428,9 @@ function resolveConfig(raw) {
     ? fallback.chain.map(entry => cleanString(entry)).filter(entry => entry !== undefined)
     : []
   return {
+    // One model entry, ours: the picker in the composer carries the shipped
+    // capabilities plus levels, probes and the manager. `native` hands the seat
+    // back to the shipped picker and leaves only the decoration.
     selector: { mode: selector.mode === 'native' ? 'native' : 'managed' },
     probe: {
       intervalMs: positiveInt(probe.intervalMs, 1200),
@@ -684,6 +693,32 @@ function normalizeUsage(raw) {
 }
 
 /**
+ * Sections the UI owns rather than a route's state.
+ *
+ * The fallback policy, the probe log and the manual proficiency overrides live in
+ * their own documents (`__config__`, `__probes__`, `__levels__`) but share this file
+ * shape. `normalizeOverlay` keeps only the keys it renders, which would erase them on
+ * the next read, so these three are carried through and validated by their readers.
+ *
+ * @param {object} raw - parsed document.
+ * @returns {object} the sections that were present.
+ */
+function carriedSections(raw) {
+  const out = {}
+  for (const key of ['fallback', 'manual']) {
+    const value = raw[key]
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) out[key] = value
+  }
+  // The probe log is a LIST, unlike the two objects above; treating it like them
+  // silently drops every record on the read that follows the write. The removal
+  // list shares that shape, and losing it would silently resurrect every model the
+  // user had taken out of the catalogue.
+  if (Array.isArray(raw.records)) out.records = raw.records
+  if (Array.isArray(raw.removed)) out.removed = raw.removed
+  return out
+}
+
+/**
  * The one persisted shape of one route's overlay.
  * @param {object} raw - parsed document.
  * @returns {object} a valid overlay.
@@ -748,6 +783,7 @@ function normalizeOverlay(raw) {
   }
   return {
     version: STORE_VERSION,
+    ...carriedSections(raw),
     revision: typeof raw.revision === 'number' ? raw.revision : 0,
     // The file name is sanitized, so it cannot always be turned back into the
     // route id. Stamping the id keeps the document self-describing.
@@ -797,15 +833,15 @@ export function apply(ctx, rawConfig) {
   /** Modest in-process cache of route catalogs, keyed by route id. */
   const catalogCache = new Map()
   /**
-   * Per-session model override awaiting the retry that consumes it.
+   * A repair the Session has not adopted yet, keyed by session id.
    *
-   * It carries the turn and step it was set for, and is only applied to that
-   * exact request. The previous version matched on session alone, so an override
-   * whose retry never happened stayed live for its whole TTL and was then
-   * consumed by whatever request came next — silently running a later turn on a
-   * model the user never chose.
+   * 0.2.2 froze the provider, model and effort of a step at preparation and
+   * re-validates them at request time, so a failing request can no longer be
+   * rerouted: the only legal move is `model.select()`, which the NEXT preparation
+   * picks up. This entry finishes a repair that did not land — a refused
+   * controller call, a Session that kept the broken level — at claim time.
    */
-  const pendingOverride = new Map()
+  const pendingRepair = new Map()
   /** Last request config seen per session, so a failure names the model it came from. */
   const lastRequest = new Map()
   /** Sessions the user told us to stop switching models in. */
@@ -817,7 +853,7 @@ export function apply(ctx, rawConfig) {
   /** Routes whose gateway directory was fetched, and when. */
   const directoryCache = new Map()
   /** Diagnostics counters, surfaced through the tool so the user can see real behaviour. */
-  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, refusals: [], bySession: {}, usageCounted: 0, usageSeed: undefined, effortHeals: [] }
+  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, refusals: [], bySession: {}, usageCounted: 0, usageSeed: undefined, effortHeals: [], repairsApplied: 0 }
   /** Level repairs per agent/turn, so a truly broken config cannot loop. */
   const effortHealAttempts = new Set()
 
@@ -859,6 +895,115 @@ export function apply(ctx, rawConfig) {
     }))
   }
 
+  /**
+   * The fallback policy in force: what the UI saved, else the Loader row's config.
+   *
+   * The chain is a user preference, not route state, so it is stored in its own
+   * document rather than rewritten into `cordis.patch.yml` — a plugin editing the
+   * profile it was loaded from is a write the user cannot review.
+   *
+   * @returns {Promise<{ enabled: boolean, chain: string[] }>} the effective policy.
+   */
+  async function effectiveFallback() {
+    const overlay = await store.read(CONFIG_DOC)
+    const stored = overlay.fallback !== null && typeof overlay.fallback === 'object' ? overlay.fallback : {}
+    const enabled = typeof stored.enabled === 'boolean' ? stored.enabled : config.fallback.enabled
+    const raw = Array.isArray(stored.chain) ? stored.chain : config.fallback.chain
+    const chain = []
+    for (const value of raw) {
+      const entry = cleanString(value)
+      // Dropping an unparsable entry rather than trusting it: the chain is applied on
+      // every failure, and a typo there would be a silent no-op forever.
+      if (entry === undefined || parseChainEntry(entry) === undefined || chain.includes(entry)) continue
+      chain.push(entry)
+    }
+    return { enabled, chain }
+  }
+
+  /**
+   * Manual proficiency overrides, keyed by model id.
+   * @returns {Promise<Map<string, number>>} level per model, only where set.
+   */
+  async function manualLevels() {
+    const overlay = await store.read(LEVEL_DOC)
+    const map = new Map()
+    for (const [model, value] of Object.entries(overlay.manual ?? {})) {
+      if (Number.isInteger(value) && value >= 1 && value <= LEVEL_STEPS.length) map.set(model, value)
+    }
+    return map
+  }
+
+  /**
+   * Append one probe to the bounded probe log.
+   *
+   * The per-model health record answers "what is true now"; this answers "what
+   * happened", which is the only way to tell a flaky model from one that has been
+   * failing for an hour. Losing a log line must never fail the probe.
+   *
+   * @param {object} entry - one probe outcome.
+   * @returns {Promise<void>} fulfillment after the write.
+   */
+  async function recordProbe(entry) {
+    try {
+      await store.update(PROBE_DOC, (overlay) => ({
+        ...overlay,
+        records: [
+          { at: Date.now(), ...entry },
+          ...(Array.isArray(overlay.records) ? overlay.records : []),
+        ].slice(0, PROBE_LOG_LIMIT),
+      }))
+    } catch {
+      // Diagnostic only.
+    }
+  }
+
+  /**
+   * Append one automatic switch to the bounded history.
+   *
+   * Written from the event handler that proves the switch, so the record says what
+   * happened (`outcome`) rather than what was intended. Losing a line must never
+   * break the recovery path, which is why the failure is swallowed.
+   *
+   * @param {object} entry - one switch outcome, already carrying `outcome`.
+   * @returns {Promise<void>} fulfillment after the write.
+   */
+  async function recordFailover(entry) {
+    try {
+      await store.update(FAILOVER_DOC, (overlay) => ({
+        ...overlay,
+        records: [
+          { at: Date.now(), ...entry },
+          ...(Array.isArray(overlay.records) ? overlay.records : []),
+        ].slice(0, FAILOVER_LOG_LIMIT),
+      }))
+    } catch {
+      // Diagnostic only.
+    }
+  }
+
+  /**
+   * Models taken out of the catalogue view.
+   *
+   * This is deliberately NOT a gateway operation: the plugin cannot unregister a
+   * model from a provider, and pretending otherwise would offer a button that does
+   * nothing. It is a local decision to stop showing what is no longer worth showing,
+   * and therefore reversible.
+   *
+   * @returns {Promise<Array<{ route: string, model: string, at: number }>>} the list.
+   */
+  async function removedList() {
+    const overlay = await store.read(REMOVED_DOC)
+    const list = Array.isArray(overlay.removed) ? overlay.removed : []
+    const out = []
+    for (const entry of list) {
+      const route = cleanString(entry?.route)
+      const model = cleanString(entry?.model)
+      if (route === undefined || model === undefined) continue
+      out.push({ route, model, at: typeof entry.at === 'number' ? entry.at : 0 })
+    }
+    return out
+  }
+
   // ── Proficiency ledger ─────────────────────────────────────────────────────
   //
   // Which models the user actually works with, counted from committed model
@@ -871,6 +1016,28 @@ export function apply(ctx, rawConfig) {
 
   /** The overlay document holding the backfill watermark; not a route. */
   const SEED_DOC = '__usage__'
+  /** Fallback policy the UI can edit, kept out of the Loader row config. */
+  const CONFIG_DOC = '__config__'
+  /** The probe log, newest first and bounded. */
+  const PROBE_DOC = '__probes__'
+  /** Manual proficiency overrides, keyed by model id. */
+  const LEVEL_DOC = '__levels__'
+  /** How many probe records are kept; the design asks for 40. */
+  const PROBE_LOG_LIMIT = 40
+  /**
+   * Every automatic model switch, kept after the session that hit it.
+   *
+   * The per-session report the banner reads dies with the page, so it could never
+   * answer "which model keeps failing" — the question that decides whether a model
+   * belongs in a chain at all. Each record is one routing decision this plugin made.
+   */
+  const FAILOVER_DOC = '__failover__'
+  /** How many switch records are kept; old ones stop describing current hardware. */
+  const FAILOVER_LOG_LIMIT = 200
+  /** Models the user took out of the catalogue view, per route. */
+  const REMOVED_DOC = '__removed__'
+  /** Upper bound on that list, so a corrupt document cannot grow the snapshot. */
+  const REMOVED_LIMIT = 400
 
   /** Pending per-route deltas, already in the stored counter shape. @type {Map<string, Map<string, object>>} */
   let usagePending = new Map()
@@ -1053,6 +1220,7 @@ export function apply(ctx, rawConfig) {
    */
   async function usageLedger(now = Date.now()) {
     await flushUsage()
+    const manual = await manualLevels()
     const byKey = new Map()
     const routes = []
     for (const route of await store.routes()) {
@@ -1061,7 +1229,7 @@ export function apply(ctx, rawConfig) {
       if (models.length === 0) continue
       routes.push({ route, revision: overlay.revision, models: models.length })
       for (const [model, entry] of models) {
-        byKey.set(keyOf(route, model), { route, model, ...usageView(entry, now) })
+        byKey.set(keyOf(route, model), { route, model, ...usageView(entry, now, manual.get(model)) })
       }
     }
     return { byKey, routes }
@@ -1413,14 +1581,24 @@ export function apply(ctx, rawConfig) {
    * @returns {Promise<object>} the classification for this model.
    */
   /**
-   * Levels a level sweep offers to the gateway, in escalation order.
+   * Reasoning levels the platform's pi-ai schema can carry, in its escalation order.
    *
-   * These are the ids this plugin's surfaces can carry, not a guess at what any one
-   * model supports: `off` is absent because DSH expresses it by OMITTING the field,
-   * which the ordinary probe already covers, and `minimal`/`xhigh` are included so a
-   * model that accepts them is discovered instead of assumed away.
+   * Mirrors `THINKING_LEVEL_GATE` in the harness's
+   * `packages/llm/llm-pi-ai/src/catalog.ts`. `verify.mjs` compares the two, so a level
+   * the platform adds fails a test here instead of silently going unprobed.
    */
-  const REASONING_PROBE_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+  /**
+   * Levels a level sweep offers to the gateway.
+   *
+   * `off` is absent on purpose: a pi-ai model expresses it by OMITTING the field, which
+   * the ordinary probe already covers — and on this gateway omission measures the same
+   * as `max`, so declaring `off` as a level would be a claim the probe never made.
+   * Every other level the schema knows is measured, so one a model accepts is
+   * discovered instead of assumed away.
+   */
+  const REASONING_PROBE_LEVELS = REASONING_LEVELS.filter(level => level !== 'off')
 
   /**
    * Ask the gateway which reasoning levels it accepts for one model.
@@ -1530,6 +1708,31 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
+   * Levels this host would offer for one model right now, or undefined when unreadable.
+   *
+   * The answer is the model's EFFECTIVE levels — its configuration when it declares
+   * any, otherwise the installed catalog's capability — which is the question a
+   * declaration has to settle before it writes anything.
+   *
+   * @param {string} route - provider route id.
+   * @param {string} model - model id.
+   * @returns {Promise<string[]|undefined>} offered level ids.
+   */
+  async function offeredLevels(route, model) {
+    const registry = llm()
+    if (registry === undefined || typeof registry.resolveModelInfo !== 'function') return undefined
+    try {
+      const info = await registry.resolveModelInfo(route, model)
+      const efforts = info?.reasoning?.efforts
+      if (!Array.isArray(efforts)) return undefined
+      return efforts.map(effort => effort?.id).filter(id => typeof id === 'string' && id.length > 0)
+    } catch {
+      // A model the catalog cannot resolve is not evidence about its levels.
+      return undefined
+    }
+  }
+
+  /**
    * Write the measured reasoning levels into the route's own configuration.
    *
    * Measurement alone cannot enable switching: the harness validates a level against
@@ -1538,15 +1741,28 @@ export function apply(ctx, rawConfig) {
    * settings service — the same write path the settings UI uses — instead of editing
    * the file behind the user's back.
    *
+   * A pi-ai declaration is CLOSED: every level it does not mention becomes "not
+   * supported" (0.2.2 `resolveModelReasoning` pins it to null). So the write merges —
+   * keys already there survive, including `off` and non-identity wire spellings the
+   * user or the settings editor put there — and only measured levels that are missing
+   * get added.
+   *
    * @param {string} route - provider route id.
    * @param {string} model - model id.
-   * @returns {Promise<{ ok: true, levels: string[] } | { ok: false, why: string }>} outcome.
+   * @returns {Promise<{ ok: true, levels: string[], already?: boolean } | { ok: false, why: string }>} outcome.
    */
   async function declareLevels(route, model) {
     const overlay = await store.read(route)
     const measured = overlay.levels?.[model]?.accepted ?? []
     if (measured.length === 0) {
       return { ok: false, why: 'no measured levels yet — probe the model first' }
+    }
+    // Nothing to declare when every measured level is already offered: writing then
+    // would replace a working declaration (the catalog's capability, or the settings
+    // editor's) with one built from this probe.
+    const offered = await offeredLevels(route, model)
+    if (offered !== undefined && measured.every(level => offered.includes(level))) {
+      return { ok: true, levels: measured, already: true }
     }
     const settings = ctx.get('settings')
     if (settings === undefined || typeof settings.describe !== 'function' || typeof settings.replace !== 'function') {
@@ -1573,14 +1789,33 @@ export function apply(ctx, rawConfig) {
     if (!Array.isArray(models)) return { ok: false, why: 'this route declares no model list in settings' }
     const index = models.findIndex(candidate => (typeof candidate === 'string' ? candidate : candidate?.id) === model)
     if (index === -1) return { ok: false, why: `model "${model}" is not declared in this route's settings` }
-    const declared = Object.fromEntries(measured.map(level => [level, level]))
+    const current = models[index]
+    const existing = current !== null && typeof current === 'object' && !Array.isArray(current)
+      ? current.reasoningEfforts
+      : undefined
+    const merged = existing !== null && typeof existing === 'object' && !Array.isArray(existing)
+      ? { ...existing }
+      : {}
+    let added = false
+    for (const level of measured) {
+      const wire = merged[level]
+      // Already offered by name or by another spelling: the measurement agrees, and
+      // rewriting the value would only lose what the declaration meant.
+      if (typeof wire === 'string' && wire.length > 0) continue
+      merged[level] = level
+      added = true
+    }
+    // Every measured level is already declared, with a spelling that works. Nothing to
+    // write, and a write here would bump the revision for no reason.
+    if (!added) return { ok: true, levels: measured, already: true }
     const next = structuredClone(descriptor.value)
     const targets = walkPath(next, [...path, 'models'])
     // A string shorthand entry becomes an object: the declaration needs a field to live
-    // in, and every accepted shape spells a model as either an id or a record.
+    // in, and every accepted shape spells a model as either an id or a record. The added
+    // levels are all non-`off`, so the merged declaration always offers something.
     targets[index] = typeof targets[index] === 'string'
-      ? { id: targets[index], name: targets[index], reasoningEfforts: declared }
-      : { ...targets[index], reasoningEfforts: declared }
+      ? { id: targets[index], name: targets[index], reasoningEfforts: merged }
+      : { ...targets[index], reasoningEfforts: merged }
     try {
       await settings.replace(entry.settingsNs, next, descriptor.revision)
     } catch (error) {
@@ -1631,6 +1866,54 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
+   * The little the composer label needs to say something the catalog cannot.
+   *
+   * Deliberately NOT `snapshot()`: that reads every route's gateway directory and builds
+   * the whole merged view, which is far too much work for a badge rendered beside a model
+   * name — and it would now run on page load, because the shipped picker owns the seat.
+   * Health and proficiency live in the overlay, so the catalog alone is enough.
+   *
+   * @returns {Promise<object[]>} one row per catalog model.
+   */
+  async function badgeIndex() {
+    // Counts still in memory are part of the answer, like in `snapshot()`.
+    await flushUsage()
+    const now = Date.now()
+    const manual = await manualLevels()
+    const groups = await catalog()
+    const overlays = new Map()
+    // Counts are the MODEL's, not one transport's: a model reachable through two routes
+    // must not read as unused beside the name the shipped picker happens to label.
+    const ledgers = new Map()
+    for (const group of groups) {
+      const overlay = await store.read(group.route)
+      overlays.set(group.route, overlay)
+      for (const model of group.models) {
+        const list = ledgers.get(model) ?? []
+        list.push(overlay.usage?.[model])
+        ledgers.set(model, list)
+      }
+    }
+    const rows = []
+    for (const group of groups) {
+      const overlay = overlays.get(group.route)
+      for (const model of group.models) {
+        const health = overlay.health[keyOf(group.route, model)]
+        const usage = usageView(mergeRouteUsage(ledgers.get(model) ?? []), now, manual.get(model))
+        rows.push({
+          route: group.route,
+          model,
+          status: health?.status ?? 'unknown',
+          detail: health?.detail ?? '',
+          level: usage.level,
+          uses: usage.uses,
+        })
+      }
+    }
+    return rows
+  }
+
+  /**
    * The merged view the picker and the panel both read: the live catalog with
    * the overlay applied, every row carrying its own reason when unusable.
    * @param {{ forceDirectory?: boolean }} [options] - refresh options.
@@ -1641,9 +1924,23 @@ export function apply(ctx, rawConfig) {
     // model must not see yesterday's number until the flush timer fires.
     await flushUsage()
     const now = Date.now()
+    const manual = await manualLevels()
+    const fallback = await effectiveFallback()
     const groups = await catalog()
     // Raw ledgers by route/model, kept out of the serialized rows: the per-model
     // view below needs them to sum across routes, and nothing else does.
+    // Models the user took out of the catalogue. The gateway still serves them, so
+    // the directory cannot be the source of truth here: the decision lives in our
+    // own overlay, and it is reversible from the manager.
+    const removed = await removedList()
+    // Keyed by MODEL, not by route+model: the catalogue rows are model-first, so a
+    // model served by two routes is still one row. Hiding one route's copy would
+    // leave the row on screen and the removal would read as broken.
+    const removedKeys = new Set(removed.map(entry => entry.model))
+    // Kept separately: `merged` excludes removed rows, so it cannot answer whether
+    // the gateway still lists one of them.
+    const listedKeys = new Set()
+    for (const group of groups) for (const model of group.models) listedKeys.add(model)
     const rawUsage = new Map()
     const directories = new Map()
     const merged = []
@@ -1658,6 +1955,7 @@ export function apply(ctx, rawConfig) {
       directories.set(group.route, directory)
       const rows = []
       for (const model of group.models) {
+        if (removedKeys.has(model)) continue
         rawUsage.set(keyOf(group.route, model), overlay.usage?.[model])
         const health = overlay.health[keyOf(group.route, model)]
         const inDirectory = directory.ok === true ? directory.ids.has(model) : undefined
@@ -1682,7 +1980,7 @@ export function apply(ctx, rawConfig) {
           // someone asked. Null means "never probed", which is different from "this
           // model has no levels" and must stay distinguishable on the surface.
           levels: overlay.levels?.[model] ?? null,
-          usage: usageView(overlay.usage?.[model], now),
+          usage: usageView(overlay.usage?.[model], now, manual.get(model)),
         })
       }
       merged.push({ ...group, rows })
@@ -1796,6 +2094,7 @@ export function apply(ctx, rawConfig) {
         usage: usageView(
           mergeRouteUsage(entry.routes.map(route => rawUsage.get(keyOf(route.route, entry.model)))),
           now,
+          manual.get(entry.model),
         ),
       }
     })
@@ -1822,7 +2121,16 @@ export function apply(ctx, rawConfig) {
       revision: await store.read('__global__').then(overlay => overlay.revision),
       selectorMode: config.selector.mode,
       models,
-      fallbackEnabled: config.fallback.enabled,
+      // What was taken out, so the manager can put it back. `listed` separates the
+      // two reasons a row can be gone: the gateway stopped serving it (nothing to
+      // undo) and the user removed it (one click to restore).
+      removed: removed.map(entry => ({
+        ...entry,
+        listed: listedKeys.has(entry.model),
+      })),
+      fallbackEnabled: fallback.enabled,
+      /** The policy itself, so the manager can edit what it shows. */
+      fallback,
       usage: {
         enabled: config.usage.enabled,
         top: usageTop,
@@ -1854,6 +2162,7 @@ export function apply(ctx, rawConfig) {
    */
   async function fallbackChain(route, failedModel) {
     const groups = await catalog()
+    const removedKeys = new Set((await removedList()).map(entry => entry.model))
     const usable = []
     for (const group of groups) {
       const overlay = await store.read(group.route)
@@ -1861,6 +2170,9 @@ export function apply(ctx, rawConfig) {
       for (const model of group.models) {
         const health = overlay.health[keyOf(group.route, model)]
         if (refHas(overlay.hidden, group.route, model)) continue
+        // Removed from the catalogue means removed from the policy: routing a turn
+        // into a model the user just took away would contradict the list they edited.
+        if (removedKeys.has(model)) continue
         if (directory.ok === true && !directory.ids.has(model)) continue
         if (health !== undefined && UNUSABLE_REASONS.has(health.status)) {
           const fresh = Date.now() - (health.at ?? 0) < QUOTA_COOLDOWN_MS
@@ -1882,7 +2194,7 @@ export function apply(ctx, rawConfig) {
       seen.add(key)
       ordered.push({ route: entry.route, model: entry.model })
     }
-    for (const entry of config.fallback.chain) {
+    for (const entry of (await effectiveFallback()).chain) {
       const parsed = parseChainEntry(entry)
       if (parsed === undefined) continue
       const match = usable.find(candidate => candidate.route === parsed.route && candidate.model === parsed.model)
@@ -1964,7 +2276,12 @@ export function apply(ctx, rawConfig) {
     const chain = await fallbackChain(provider, failedModel)
     const next = chain[0]
     if (next === undefined) return { ok: false, why: 'no usable alternative model was found' }
-    pendingOverride.set(agent.id, { route: next.route, model: next.model, turn, step: payload.step, at: Date.now() })
+    pendingRepair.set(agent.id, {
+      from: { route: provider, model: failedModel },
+      to: { route: next.route, model: next.model },
+      clearEffort: false,
+      at: Date.now(),
+    })
     fallbacksThisTurn.set(budgetKey, spent + 1)
     diagnostics.fallbacks += 1
     const previous = { route: provider, model: failedModel }
@@ -2009,12 +2326,13 @@ export function apply(ctx, rawConfig) {
    *
    * The failure is a stale or misspelled SELECTION, not a sick model. Switching models
    * would hide the configuration mistake, and recording it against the model would
-   * blacklist something that works. So the level is replaced by the one the model
-   * declares as its default (or its first level, or no level at all when it declares
-   * none), the Session is moved with it, and the same request is retried once.
+   * blacklist something that works. So the level is REMOVED — the request then uses the
+   * adapter default, which the harness validates against the declaration — and the
+   * Session is moved with it. The step's own selection is frozen, so this repairs the
+   * NEXT one; retrying would replay the level that was just rejected.
    *
    * @param {object} payload - the `agent/request-error` payload.
-   * @returns {Promise<{ ok: true, to: string|null } | { ok: false, why: string }>} outcome.
+   * @returns {Promise<{ ok: true, to: null } | { ok: false, why: string }>} outcome.
    */
   async function healEffort(payload) {
     const { agent, turn, provider } = payload
@@ -2022,40 +2340,25 @@ export function apply(ctx, rawConfig) {
     if (model === undefined) return { ok: false, why: 'the failing model could not be identified' }
     const budgetKey = `${agent.id}/${turn}`
     if (effortHealAttempts.has(budgetKey)) return { ok: false, why: 'the level was already repaired this turn' }
-    const registry = llm()
-    if (registry === undefined || typeof registry.resolveModelInfo !== 'function') {
-      return { ok: false, why: 'the model catalog is unreachable, so no valid level can be chosen' }
-    }
-    let info
-    try {
-      info = await registry.resolveModelInfo(provider, model)
-    } catch (error) {
-      return {
-        ok: false,
-        why: `the model's levels could not be read: ${error instanceof Error ? error.message : String(error)}`,
-      }
-    }
-    const reasoning = info?.reasoning
-    const target = reasoning?.defaultEffort ?? reasoning?.efforts?.[0]?.id
     effortHealAttempts.add(budgetKey)
-    // A model that declares nothing must be asked with NO level at all: repeating the
-    // unsupported one, or inventing an id, would fail the retry for the same reason.
-    pendingOverride.set(agent.id, {
-      route: provider,
-      model,
-      turn,
-      step: payload.step,
+    // 0.2.2 gives "no explicit level" a meaning of its own: the request falls back to the
+    // adapter default, and the harness has already validated that default against the
+    // model's declaration. Re-pinning it would turn an automatic setting into an explicit
+    // one on every repair, and choosing the first declared level would invent a preference
+    // the Session never had. So the repair is a CLEAR.
+    pendingRepair.set(agent.id, {
+      from: { route: provider, model },
+      to: { route: provider, model },
+      clearEffort: true,
       at: Date.now(),
-      reasoningEffort: target,
-      clearEffort: target === undefined,
     })
-    const moved = await selectSessionModel(agent.id, { route: provider, model, reasoningEffort: target })
+    const moved = await selectSessionModel(agent.id, { route: provider, model })
     diagnostics.effortHeals.push({
       at: Date.now(),
       agent: agent.id,
       turn,
       model,
-      to: target ?? null,
+      to: null,
       sessionMoved: moved.ok === true,
     })
     if (moved.ok !== true) {
@@ -2063,13 +2366,13 @@ export function apply(ctx, rawConfig) {
     }
     try {
       ctx.logger?.info?.(
-        'llm-manage: unsupported reasoning level on %s/%s — retrying at %s (session moved: %s)',
-        provider, model, target ?? 'the model default', moved.ok === true,
+        'llm-manage: unsupported reasoning level on %s/%s — the next message uses the adapter default (session moved: %s)',
+        provider, model, moved.ok === true,
       )
     } catch {
       // Logging is diagnostic only and must never break recovery.
     }
-    return { ok: true, to: target ?? null }
+    return { ok: true, to: null }
   }
 
   // ── Recovery: capture each request's model, then move it on quota failure ──
@@ -2115,7 +2418,9 @@ export function apply(ctx, rawConfig) {
           diagnostics.refusals.push({ at: Date.now(), why: repaired.why })
           return next()
         }
-        return { kind: 'retry' }
+        // A retry replays the step's frozen selection, so it would ask for the level
+        // that was just refused. The repair belongs to the next message.
+        return undefined
       }
       // Only a model-scoped, switchable failure is ours; everything else keeps
       // the stock behaviour, including the retry policy for real rate limits.
@@ -2131,35 +2436,57 @@ export function apply(ctx, rawConfig) {
         diagnostics.refusals.push({ at: Date.now(), why: outcome.why })
         return next()
       }
-      // `{ kind: 'retry' }` re-enters the step loop, which re-dispatches
-      // `agent/request`; the override below replaces the model there.
-      return { kind: 'retry' }
+      // Not a retry: the step's selection is frozen, so retrying asks the model that
+      // just failed again and only delays the real error. The switch is committed to
+      // the Session and takes effect from the next message.
+      return undefined
     })
 
-    // Applied last in the waterfall chain by returning `next()`'s decision with
-    // the model replaced, so other plugins' request shaping is preserved.
-    scope.on('agent/request', async (payload, next) => {
-      const decision = await next()
-      const override = pendingOverride.get(payload.agent.id)
-      if (override === undefined) return decision
-      pendingOverride.delete(payload.agent.id)
-      // Bound to the exact request it was decided for. Anything else — a later
-      // step, a later turn, an expired entry — drops it instead of applying it,
-      // so a retry that never happened cannot move some future turn's model.
-      if (override.turn !== payload.turn || override.step !== payload.step) return decision
-      if (Date.now() - override.at > OVERRIDE_TTL_MS) return decision
-      const applied = { ...decision, provider: override.route, model: override.model }
-      // A level repair changes the effort on the SAME model, and a model that declares no
-      // levels must be asked with none — so clearing is a distinct instruction, not an
-      // absent value.
-      if (override.clearEffort === true) delete applied.reasoningEffort
-      else if (override.reasoningEffort !== undefined) applied.reasoningEffort = override.reasoningEffort
-      return applied
+    // `agent/inbox/claimed` fires synchronously inside step preparation, after the
+    // message is claimed and BEFORE the step reads `model.current()` — the last moment
+    // a selection change is still legal for the step about to run. A repair that landed
+    // needs nothing here; this only finishes one that did not, and never overrules a
+    // model the user picked in the meantime.
+    scope.on('agent/inbox/claimed', ({ agent }) => {
+      const repair = pendingRepair.get(agent.id)
+      if (repair === undefined) return
+      const model = agent.model
+      // An emit listener that throws would break the claim itself, so a Host without
+      // the documented surface is simply not repaired here.
+      if (model === undefined || typeof model.current !== 'function' || typeof model.select !== 'function') {
+        pendingRepair.delete(agent.id)
+        return
+      }
+      const current = model.current()
+      const stillTheBrokenOne = current !== undefined
+        && current.provider === repair.from.route
+        && current.model === repair.from.model
+      // A level repair is done once the selection carries no explicit level; a model
+      // switch is done once the selection has moved off the failing model.
+      const pending = repair.clearEffort === true
+        ? stillTheBrokenOne && current.reasoningEffort !== undefined
+        : stillTheBrokenOne
+      if (!pending) {
+        pendingRepair.delete(agent.id)
+        return
+      }
+      try {
+        // Synchronous by contract: `select()` only appends a `model/selection` event,
+        // and the projection this step is about to read updates with it.
+        model.select({ provider: repair.to.route, model: repair.to.model })
+        diagnostics.repairsApplied += 1
+      } catch (error) {
+        diagnostics.refusals.push({
+          at: Date.now(),
+          why: `claim-time repair did not apply: ${error instanceof Error ? error.message : String(error)}`,
+        })
+      }
+      pendingRepair.delete(agent.id)
     })
 
     scope.on('agent/disposed', ({ agent }) => {
       lastRequest.delete(agent.id)
-      pendingOverride.delete(agent.id)
+      pendingRepair.delete(agent.id)
       for (const key of fallbacksThisTurn.keys()) if (key.startsWith(`${agent.id}/`)) fallbacksThisTurn.delete(key)
       for (const key of effortHealAttempts) if (key.startsWith(`${agent.id}/`)) effortHealAttempts.delete(key)
     })
@@ -2187,7 +2514,7 @@ export function apply(ctx, rawConfig) {
       // recover. Report the truth — the target was never reached — and stop
       // carrying the decision.
       pendingSwitch.delete(sessionId)
-      diagnostics.bySession[sessionId] = {
+      const report = {
         at: Date.now(),
         from: pending.from,
         to: pending.to,
@@ -2197,6 +2524,11 @@ export function apply(ctx, rawConfig) {
         sessionSwitched: pending.sessionSwitched,
         ran: null,
       }
+      diagnostics.bySession[sessionId] = report
+      // Kept beyond this session: the banner answers "what happened in this turn",
+      // the history answers "which model keeps doing this", and only the second can
+      // decide that a model does not belong in a fallback chain.
+      recordFailover({ sessionId, ...report })
       return
     }
     if (event?.type !== 'assistant/message') return
@@ -2209,7 +2541,7 @@ export function apply(ctx, rawConfig) {
     // number is not checked, because the retry may commit on a later step.
     pendingSwitch.delete(sessionId)
     const target = ran !== null && ran.route === pending.to.route && ran.model === pending.to.model
-    diagnostics.bySession[sessionId] = {
+    const report = {
       at: Date.now(),
       from: pending.from,
       to: pending.to,
@@ -2219,6 +2551,8 @@ export function apply(ctx, rawConfig) {
       sessionSwitched: pending.sessionSwitched,
       ran,
     }
+    diagnostics.bySession[sessionId] = report
+    recordFailover({ sessionId, ...report })
   })
 
   // ── Counting: every committed model response, exactly once ──
@@ -2395,13 +2729,20 @@ export function apply(ctx, rawConfig) {
             // one enum would list every model on every page load.
             case 'selectorMode':
               return json({ ok: true, value: { selectorMode: config.selector.mode } })
+            // Decoration for the shipped picker's inline model label: one row per
+            // catalog model, and nothing that needs the gateway directory.
+            case 'badges':
+              return json({ ok: true, value: await badgeIndex() })
               // Turn the probe's answer into a declaration, so a level the gateway accepts
               // becomes one this model can actually be switched to.
               case 'declareLevels': {
                 if (route === undefined || model === undefined) return json({ ok: false, message: 'declareLevels needs a route and a model' }, 400)
                 const declared = await declareLevels(route, model)
                 if (!declared.ok) return json({ ok: false, message: declared.why }, 400)
-                return json({ ok: true, value: { route, model, levels: declared.levels } })
+                return json({
+                  ok: true,
+                  value: { route, model, levels: declared.levels, ...(declared.already === true ? { already: true } : {}) },
+                })
               }
             case 'sync': {
               if (route === undefined) return json({ ok: false, message: 'sync needs a route' }, 400)
@@ -2410,6 +2751,7 @@ export function apply(ctx, rawConfig) {
             }
             case 'probe': {
               if (route === undefined || model === undefined) return json({ ok: false, message: 'probe needs a route and a model' }, 400)
+              const startedAt = Date.now()
               const verdict = await probeModel(route, model)
               await recordHealth(route, model, verdict, 'probe')
               // Only an explicit single-model probe sweeps levels: a batch would
@@ -2430,11 +2772,21 @@ export function apply(ctx, rawConfig) {
               let declared = undefined
               if (Array.isArray(levels?.accepted) && levels.accepted.length > 0) {
                 const result = await declareLevels(route, model)
-                if (result.ok) declared = { levels: result.levels }
+                if (result.ok) declared = { levels: result.levels, ...(result.already === true ? { already: true } : {}) }
                 else if (typeof result.why === 'string' && !/no measured levels/.test(result.why)) {
                   ctx.logger?.warn?.('llm-manage: auto-declare refused for %s/%s: %s', route, model, result.why)
                 }
               }
+              await recordProbe({
+                route,
+                model,
+                status: verdict.reason,
+                detail: verdict.detail ?? '',
+                source: 'probe',
+                levels: Array.isArray(levels?.accepted) ? levels.accepted : [],
+                declared: declared ?? null,
+                ms: Date.now() - startedAt,
+              })
               return json({ ok: true, value: { route, model, ...verdict, levels, declared }, snapshot: await snapshot() })
             }
             case 'toggle': {
@@ -2485,6 +2837,16 @@ export function apply(ctx, rawConfig) {
                 const verdict = await probeModel(targetRoute, targetModel)
                 await recordHealth(targetRoute, targetModel, verdict, 'probe')
                 results.push({ route: targetRoute, model: targetModel, ...verdict })
+                await recordProbe({
+                  route: targetRoute,
+                  model: targetModel,
+                  status: verdict.reason,
+                  detail: verdict.detail ?? '',
+                  source: 'batch',
+                  levels: [],
+                  declared: null,
+                  ms: 0,
+                })
                 await new Promise(resolve => setTimeout(resolve, config.probe.intervalMs))
               }
               return json({ ok: true, value: { results, count: results.length }, snapshot: await snapshot() })
@@ -2502,6 +2864,87 @@ export function apply(ctx, rawConfig) {
                 // must learn that their level was replaced, not discover it in a silent retry.
                 effortHeals: diagnostics.effortHeals.filter(entry => entry.agent === sessionId).slice(-5),
               })
+            }
+            // The switch history, kept across sessions. The per-session report above
+            // answers "what happened in this turn"; this answers "which model keeps
+            // failing", which is the only form of the answer that can change a chain.
+            case 'failoverHistory': {
+              const overlay = await store.read(FAILOVER_DOC)
+              const records = (Array.isArray(overlay.records) ? overlay.records : [])
+                .filter(entry => entry !== null && typeof entry === 'object')
+                .slice(0, FAILOVER_LOG_LIMIT)
+              const byModel = new Map()
+              for (const record of records) {
+                const model = cleanString(record.from?.model)
+                if (model === undefined) continue
+                const stat = byModel.get(model) ?? {
+                  model,
+                  route: cleanString(record.from?.route) ?? '',
+                  switches: 0,
+                  reached: 0,
+                  unreached: 0,
+                  elsewhere: 0,
+                  lastAt: 0,
+                  sessions: new Set(),
+                  reasons: {},
+                }
+                stat.switches += 1
+                if (record.outcome === 'reached') stat.reached += 1
+                else if (record.outcome === 'unreached') stat.unreached += 1
+                else if (record.outcome === 'ran-elsewhere') stat.elsewhere += 1
+                if (typeof record.at === 'number' && record.at > stat.lastAt) stat.lastAt = record.at
+                const session = cleanString(record.sessionId)
+                if (session !== undefined) stat.sessions.add(session)
+                const reason = cleanString(record.reason) ?? 'unknown'
+                stat.reasons[reason] = (stat.reasons[reason] ?? 0) + 1
+                byModel.set(model, stat)
+              }
+              // Worst first: the point of the list is to find the model that keeps
+              // costing a retry, not to admire the ones that never did.
+              const models = [...byModel.values()]
+                .map(stat => ({ ...stat, sessions: stat.sessions.size }))
+                .sort((left, right) => right.switches - left.switches
+                  || right.lastAt - left.lastAt
+                  || left.model.localeCompare(right.model))
+              return json({ ok: true, value: { records, models } })
+            }
+            case 'clearFailover': {
+              await store.update(FAILOVER_DOC, (overlay) => ({ ...overlay, records: [] }))
+              return json({ ok: true })
+            }
+            // Taking a model out of the catalogue view. Not a gateway operation —
+            // the plugin cannot unregister a model upstream — so it is a local
+            // decision that stays reversible, and the response carries the whole
+            // snapshot so the dialog does not have to guess what changed.
+            case 'removeModel': {
+              const route = cleanString(body?.route)
+              const model = cleanString(body?.model)
+              if (route === undefined || model === undefined) {
+                return json({ ok: false, error: 'removeModel needs route and model' }, 400)
+              }
+              await store.update(REMOVED_DOC, (overlay) => {
+                const list = Array.isArray(overlay.removed) ? overlay.removed : []
+                // One entry per model: the row being hidden is the model, and the
+                // route is only recorded so the manager can say where it came from.
+                const kept = list.filter(entry => cleanString(entry?.model) !== model)
+                return { ...overlay, removed: [{ route, model, at: Date.now() }, ...kept].slice(0, REMOVED_LIMIT) }
+              })
+              return json({ ok: true, value: await snapshot() })
+            }
+            case 'restoreModel': {
+              const route = cleanString(body?.route)
+              const model = cleanString(body?.model)
+              if (route === undefined || model === undefined) {
+                return json({ ok: false, error: 'restoreModel needs route and model' }, 400)
+              }
+              await store.update(REMOVED_DOC, (overlay) => {
+                const list = Array.isArray(overlay.removed) ? overlay.removed : []
+                return {
+                  ...overlay,
+                  removed: list.filter(entry => cleanString(entry?.model) !== model),
+                }
+              })
+              return json({ ok: true, value: await snapshot() })
             }
             // Undo. The switch now moves the Session's own model, so undoing it
             // means moving it back — the same call the switch itself made.
@@ -2523,6 +2966,55 @@ export function apply(ctx, rawConfig) {
               if (sessionId === undefined) return json({ ok: false, error: 'fallbackSuppress needs sessionId' }, 400)
               noAutoSwitch.add(sessionId)
               return json({ ok: true })
+            }
+            // The fallback policy is a preference the UI owns. Reading and writing it
+            // here keeps `cordis.patch.yml` out of the write path: a plugin that edits
+            // the profile it was loaded from makes a change the user cannot review.
+            case 'fallbackConfig':
+              return json({ ok: true, value: await effectiveFallback() })
+            case 'setFallback': {
+              const next = {}
+              if (typeof body?.enabled === 'boolean') next.enabled = body.enabled
+              if (Array.isArray(body?.chain)) {
+                const chain = []
+                for (const raw of body.chain.slice(0, FALLBACK_LIMIT)) {
+                  const entry = cleanString(raw)
+                  if (entry === undefined) continue
+                  if (parseChainEntry(entry) === undefined) {
+                    return json({ ok: false, message: `"${entry}" is not a route/model pair` }, 400)
+                  }
+                  if (!chain.includes(entry)) chain.push(entry)
+                }
+                next.chain = chain
+              }
+              await store.update(CONFIG_DOC, overlay => ({
+                ...overlay,
+                fallback: { ...(overlay.fallback ?? {}), ...next },
+              }))
+              return json({ ok: true, value: await effectiveFallback(), snapshot: await snapshot() })
+            }
+            case 'probeRecords': {
+              const overlay = await store.read(PROBE_DOC)
+              const records = Array.isArray(overlay.records) ? overlay.records.slice(0, PROBE_LOG_LIMIT) : []
+              return json({ ok: true, value: { records } })
+            }
+            // Proficiency is derived from the ledger, but the user may know better
+            // ("this is my main model"); a manual level is stored beside the counters
+            // and wins over them without erasing them.
+            case 'setLevel': {
+              if (model === undefined) return json({ ok: false, message: 'setLevel needs a model' }, 400)
+              const raw = body?.level
+              const level = raw === null || raw === undefined ? null : Number(raw)
+              if (level !== null && (!Number.isInteger(level) || level < 1 || level > LEVEL_STEPS.length)) {
+                return json({ ok: false, message: `level must be 1..${LEVEL_STEPS.length} or null` }, 400)
+              }
+              await store.update(LEVEL_DOC, (overlay) => {
+                const manual = { ...(overlay.manual ?? {}) }
+                if (level === null) delete manual[model]
+                else manual[model] = level
+                return { ...overlay, manual }
+              })
+              return json({ ok: true, value: { model, level }, snapshot: await snapshot() })
             }
             default:
               return json({ ok: false, message: `unknown action "${String(action)}"` }, 400)

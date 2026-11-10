@@ -5,7 +5,8 @@
 # gateway directory reconcile, and the quota fallback chain. The `dsh.client`
 # declaration in package.json makes the web shell load ./client.js as the
 # browser half; it renders the management panel on the provider card, the
-# fallback banner, and the managed model picker.
+# fallback banner, the label inside the shipped composer picker, and (when
+# asked for) a picker of its own.
 #
 # Every value below is a default. Override any of them here and the user's
 # patch layer keeps the override across upgrades.
@@ -13,10 +14,16 @@
     - id: llm-manage
       name: 'dsh-llm-manage'
       config:
-        # 'managed' shadows the shipped composer picker at priority -1 so
-        # favorites and pins are reachable without scrolling. Set 'native' to
-        # withdraw the shadow and get the shipped picker back untouched.
+        # 'native' leaves the shipped composer picker in its seat and only adds
+        # this plugin's marks to each model name: since DSH 0.2.2 that picker
+        # carries the reasoning levels, the badges and the provider-default
+        # effort itself. 'managed' shadows it at priority -1 with our own picker,
+        # where row actions (pin/star/hide/probe) and the model-first grouping
+        # are one click away.
         selector:
+          # Ours owns the seat: one entry, with the shipped capabilities
+          # (search, provider grouping, keyboard roaming) plus levels, probes
+          # and the manager. `native` hands the seat back to the shipped picker.
           mode: managed
         # Deep probes spend the gateway's per-key rate budget, so they are
         # deliberately manual and serialised. See README before raising `batch`.

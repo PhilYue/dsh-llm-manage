@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-manage",
-  "version": "0.1.3",
+  "version": "0.3.12",
   "private": false,
   "type": "module",
   "description": "Model inventory, health reasons and quota fallback for DSH LLM provider routes",
@@ -23,6 +23,9 @@
     "verify-browser.mjs",
     "verify-live.mjs",
     "screenshot.mjs",
+    "tools/check-upstream.mjs",
+    "docs/upstream-parity.json",
+    "docs/upstream-parity.md",
     "README.md",
     "LICENSE"
   ],
@@ -40,6 +43,10 @@
       ]
     },
     "manifestVersion": 1
+  },
+  "scripts": {
+    "verify": "node verify.mjs && node verify-client.mjs && node verify-browser.mjs",
+    "check:upstream": "node tools/check-upstream.mjs"
   },
   "license": "MIT",
   "publishConfig": {

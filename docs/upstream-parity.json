@@ -1,0 +1,74 @@
+{
+  "note": "What the shipped model menu offers that this plugin took over. Every upstream row is either reproduced here or skipped with a reason on record; tools/check-upstream.mjs refuses an upstream row it has never heard of.",
+  "slots": [
+    {
+      "key": "conversation.input.model",
+      "source": "packages/client/ui-model-selection/src/client/index.ts",
+      "children": [
+        {
+          "key": "conversation.input.model.label",
+          "occupants": [
+            {
+              "id": "llm-manage-label",
+              "status": "rendered",
+              "origin": "ours"
+            }
+          ]
+        },
+        {
+          "key": "conversation.input.model.options",
+          "occupants": [
+            {
+              "id": "agent-team",
+              "origin": "upstream",
+              "status": "rendered",
+              "where": "TeamModeRow in client.js draws the same row from the same projection and the same remote method",
+              "origin": "upstream"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "copy": {
+    "source": "packages/client/ui-agent-team/src/client/locales.ts",
+    "keys": [
+      [
+        "mode.label",
+        "teamLabel"
+      ],
+      [
+        "mode.infoLabel",
+        "teamInfo"
+      ],
+      [
+        "mode.description",
+        "teamDescription"
+      ],
+      [
+        "mode.failed",
+        "teamFailed"
+      ],
+      [
+        "disable.title",
+        "teamDisableTitle"
+      ],
+      [
+        "disable.description",
+        "teamDisableText"
+      ],
+      [
+        "disable.warning",
+        "teamDisableWarning"
+      ],
+      [
+        "disable.cancel",
+        "teamDisableCancel"
+      ],
+      [
+        "disable.confirm",
+        "teamDisableConfirm"
+      ]
+    ]
+  }
+}

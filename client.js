@@ -77,6 +77,12 @@ window.__ModuleLoader__.load({
         loading: 'Reading models…',
         retry: 'Retry',
         refresh: 'Re-check gateway',
+        pullDir: 'Re-pull the model directory',
+        pullWorking: 'Re-pulling…',
+        pullDone: 'Re-pulled: {detail} models',
+        pullMissing: '; retired {names}',
+        pullFailed: 'Re-pull failed: {message}',
+        pullStamp: 'directory {route} {count} · {age}',
         deepProbe: 'Deep-probe all',
         deepProbeTitle: 'Sends one minimal request per model. This gateway meters the whole API key, so a full sweep can rate-limit you.',
         showAll: 'Show all',
@@ -113,6 +119,78 @@ window.__ModuleLoader__.load({
         sortDefault: 'Default',
         sortLevel: 'By proficiency',
         sortHeat: 'By recent use',
+        tabFrequent: 'Frequent',
+        tabAll: 'All',
+        frequentEmpty: 'Nothing pinned, starred or used yet — those models land in this tab.',
+        railProbe: 'Measure levels',
+        panelClose: 'Close',
+        managerOpen: 'Manage models',
+        managerTitle: 'Model manager',
+        managerSearch: 'Search models',
+        managerFilter: 'Filter',
+        managerEmpty: 'Nothing matches this filter.',
+        managerLoadFailed: 'Could not read the model list.',
+        hostStale: 'This host still runs an older copy of the plugin — restart `dsh web` to load its newer actions.',
+        managerSaved: 'Saved',
+        managerSaving: 'Saving…',
+        managerSaveFailed: 'Saving failed.',
+        managerWriteFailed: 'That change did not land.',
+        managerProbeFailed: 'The probe did not finish.',
+        managerDirty: 'Unsaved changes',
+        managerSave: 'Save',
+        managerCancel: 'Cancel',
+        managerDiscardTitle: 'Discard changes?',
+        managerDiscardBody: 'The fallback order and the proficiency edits have not been saved.',
+        managerDiscard: 'Discard',
+        managerKeep: 'Keep editing',
+        tabCatalog: 'Catalog',
+        tabFailover: 'Failover',
+        tabRecords: 'Probes',
+        tabSwitches: 'Switches',
+        removeModel: 'Remove from the catalog',
+        removeModelDone: 'Removed — the gateway still serves it, and it can be restored below.',
+        restoreModelDone: 'Restored.',
+        removedTitle: 'Removed from the catalog',
+        removedListed: 'still served upstream',
+        removedGone: 'gone from the gateway',
+        removedRestore: 'Restore',
+        switchesModels: 'Models that triggered a switch',
+        switchesClear: 'Clear',
+        switchesEmpty: 'No automatic switch has happened yet.',
+        switchesRecent: 'Recent switches',
+        switchesNote: 'Only proven switches are recorded: which model failed, what it moved to, and whether that ended the failure. A history that could not be cleared would only describe a machine that no longer exists.',
+        switchesReached: 'recovered',
+        switchesUnreached: 'still failed',
+        switchesElsewhere: 'answered elsewhere',
+        switchesSessions: 'sessions',
+        switchOpenSession: 'Open this session',
+        outcomeReached: 'recovered',
+        outcomeUnreached: 'did not recover',
+        outcomeElsewhere: 'ran elsewhere',
+        filterAll: 'All',
+        filterProblem: 'Needs attention',
+        filterPinned: 'Pinned',
+        filterStarred: 'Starred',
+        filterHidden: 'Hidden',
+        probeAll: 'Probe all',
+        levelManual: 'Proficiency',
+        levelAuto: 'Auto',
+        fallbackToggle: 'Switch model automatically when a route fails',
+        fallbackEmpty: 'No fallback candidates yet — add one below.',
+        fallbackPick: 'Choose a model',
+        fallbackAdd: 'Add',
+        fallbackUp: 'Move up',
+        fallbackDown: 'Move down',
+        fallbackRemove: 'Remove',
+        fallbackNote1: 'Only models the catalog still resolves and that are not hidden enter the chain.',
+        fallbackNote2: 'The model that just failed is skipped even when it appears later in the chain.',
+        fallbackNote3: 'A switch is applied at most once per turn, so one failure cannot cascade.',
+        fallbackNote4: 'A switch takes effect on the next message: the turn that failed is not retried on the new model.',
+        checkChain: 'Check the chain',
+        chainMissing: 'not in the catalog',
+        chainHidden: 'hidden',
+        chainUnprobed: 'not checked yet',
+        recordsEmpty: 'No probes recorded yet.',
         seededNote: 'counted from your existing session logs',
         resetUsage: 'Clear usage',
         resetUsageTitle: 'Deletes the locally recorded usage counters. This cannot be undone.',
@@ -173,6 +251,15 @@ window.__ModuleLoader__.load({
         effortUpstreamNote: 'DSH sends no level, so the upstream decides',
         effortMeasuredHint: 'Measured at the gateway, not declared yet',
         effortDeclareNow: 'Declare these levels',
+        teamLabel: 'Enable agent teamwork',
+        teamInfo: 'About agent teamwork',
+        teamDescription: 'Coordinate work and progress across agents with a shared task board for better results on complex tasks, with correspondingly higher token costs.',
+        teamFailed: 'Could not confirm the agent teamwork setting was saved. Try again: {message}',
+        teamDisableTitle: 'Disable agent teamwork?',
+        teamDisableText: 'Disabling agent teamwork during a conversation stops the use of shared task tools and team coordination instructions.',
+        teamDisableWarning: 'Disabling it may affect cache reuse, increase subsequent token usage and costs, and affect collaboration on the current task.',
+        teamDisableCancel: 'Cancel',
+        teamDisableConfirm: 'Disable',
         search: 'Search models',
         noModels: 'No models matched.',
         unavailable: 'unavailable',
@@ -182,7 +269,7 @@ window.__ModuleLoader__.load({
         // switch that never reached the model must not read like one that did.
         fallbackTitleReached: 'Model switched',
         fallbackTitleElsewhere: 'Switch did not take effect',
-        fallbackTitleUnreached: 'Switch attempted, turn not recovered',
+        fallbackTitleUnreached: 'Model switched — applies from the next message',
         // Per-reason wording. One hardcoded sentence used to claim "exhausted
         // quota" for every cause, including causes that are not about quota.
         fallbackReasonQuota: 'quota exhausted',
@@ -193,6 +280,9 @@ window.__ModuleLoader__.load({
         fallbackReasonError: 'the route reported a failure',
         fallbackRanOn: 'the turn actually ran on',
         fallbackRevert: 'Switch back',
+        fallbackContinue: 'Continue',
+        fallbackContinueFilled: 'Filled into the draft — edit it or send it',
+        continuePrompt: 'Continue from where the previous answer stopped.',
         fallbackSuppress: 'Stop switching',
         fallbackSuppressed: 'Automatic switching off',
         dismiss: 'Dismiss',
@@ -201,6 +291,46 @@ window.__ModuleLoader__.load({
         sourceProbe: 'deep probe',
         sourcePassive: 'observed request',
         never: 'never checked',
+        ctlIdle: 'Commands',
+        ctlKey: '\u2318K',
+        ctlDraft: 'Draft',
+        ctlChars: 'chars',
+        ctlAttach: 'files',
+        ctlQueued: 'queued',
+        ctlRunning: 'Running',
+        ctlWaiting: 'waiting for you',
+        ctlAdjudicating: 'reading command',
+        ctlClaimed: 'command claimed',
+        ctlSubmitting: 'running command',
+        ctlSending: 'sending',
+        ctlEffort: 'Level',
+        ctlAuto: 'Auto',
+        ctlPaletteOpen: 'Open the command palette',
+        paletteTitle: 'Commands',
+        paletteSend: 'Send',
+        paletteClear: 'Clear the draft',
+        paletteCopyId: 'Copy the session id',
+        paletteCopied: 'copied',
+        paletteProbe: 'Probe the current model',
+        paletteProbed: 'probe finished',
+        paletteProbeFailed: 'the route did not answer',
+        paletteSwitchFailed: 'that level was refused',
+        paletteSearch: 'Type to filter commands',
+        paletteEmpty: 'No command matches',
+        paletteWorking: 'working',
+        paletteFailed: 'the action failed',
+        paletteNoLevels: 'no level measured yet \u2014 probe the model first',
+        paletteCurrent: 'current',
+        paletteGroupSession: 'This session',
+        paletteGroupModel: 'Model',
+        paletteGroupDiag: 'Diagnostics',
+        paletteGroupManage: 'Manage',
+        paletteSync: 'Refresh the gateway catalogue',
+        paletteSyncDone: 'catalogue refreshed',
+        paletteProbeAll: 'Probe every model on this route',
+        paletteProbeAllSent: 'probes queued \u2014 see the probe log',
+        paletteFailoverLog: 'Recent failovers',
+        paletteProbeRecords: 'Probe log',
       },
       zh: {
         panelTitle: '模型管理',
@@ -208,6 +338,12 @@ window.__ModuleLoader__.load({
         loading: '读取模型中…',
         retry: '重试',
         refresh: '重新检查网关',
+        pullDir: '重新拉取模型目录',
+        pullWorking: '正在重新拉取…',
+        pullDone: '已重新拉取：{detail} 个模型',
+        pullMissing: '；下线了 {names}',
+        pullFailed: '重新拉取失败：{message}',
+        pullStamp: '目录 {route} {count} · {age}',
         deepProbe: '深探全部',
         deepProbeTitle: '对每个模型发一次最小请求。该网关按 API Key 整体限流，全量探测可能把你自己限流。',
         showAll: '展开全部',
@@ -244,6 +380,78 @@ window.__ModuleLoader__.load({
         sortDefault: '默认',
         sortLevel: '按熟练度',
         sortHeat: '按近期热度',
+        tabFrequent: '常用',
+        tabAll: '全部',
+        frequentEmpty: '还没有置顶、收藏或用过的模型——它们会出现在这里。',
+        railProbe: '探测档位',
+        panelClose: '关闭',
+        managerOpen: '模型管理',
+        managerTitle: '模型管理',
+        managerSearch: '搜索模型',
+        managerFilter: '筛选',
+        managerEmpty: '没有符合筛选条件的模型。',
+        managerLoadFailed: '无法读取模型列表。',
+        hostStale: '宿主仍在运行旧版插件：重启 dsh web 之后这些面板才有数据。',
+        managerSaved: '已保存',
+        managerSaving: '保存中…',
+        managerSaveFailed: '保存失败。',
+        managerWriteFailed: '这项改动没有落地。',
+        managerProbeFailed: '探活没有完成。',
+        managerDirty: '有未保存的修改',
+        managerSave: '保存',
+        managerCancel: '取消',
+        managerDiscardTitle: '放弃修改？',
+        managerDiscardBody: '后备顺序与熟练度的修改还没有保存。',
+        managerDiscard: '放弃',
+        managerKeep: '继续编辑',
+        tabCatalog: '模型目录',
+        tabFailover: '故障切换',
+        tabRecords: '探活记录',
+        tabSwitches: '切换记录',
+        removeModel: '从目录移除',
+        removeModelDone: '已从目录移除——网关仍在提供，可在下方恢复。',
+        restoreModelDone: '已恢复。',
+        removedTitle: '已从目录移除',
+        removedListed: '网关仍在提供',
+        removedGone: '网关已不再提供',
+        removedRestore: '恢复',
+        switchesModels: '触发过切换的模型',
+        switchesClear: '清空',
+        switchesEmpty: '还没有发生过自动切换。',
+        switchesRecent: '最近切换',
+        switchesNote: '只记录已经证实的切换：哪个模型失败、换到了哪个、是否真的恢复了。不能清空的记录只能描述一台已经不存在的机器。',
+        switchesReached: '已恢复',
+        switchesUnreached: '仍未恢复',
+        switchesElsewhere: '落到别处',
+        switchesSessions: '个会话',
+        switchOpenSession: '打开这个会话',
+        outcomeReached: '已恢复',
+        outcomeUnreached: '未恢复',
+        outcomeElsewhere: '落到别处',
+        filterAll: '全部',
+        filterProblem: '需要处理',
+        filterPinned: '置顶',
+        filterStarred: '收藏',
+        filterHidden: '已隐藏',
+        probeAll: '全部探活',
+        levelManual: '熟练度',
+        levelAuto: '自动',
+        fallbackToggle: '路由失败时自动切换模型',
+        fallbackEmpty: '还没有后备候选模型——在下方添加。',
+        fallbackPick: '选择模型',
+        fallbackAdd: '添加',
+        fallbackUp: '上移',
+        fallbackDown: '下移',
+        fallbackRemove: '移除',
+        fallbackNote1: '只有目录仍能解析、且未被隐藏的模型会进入候选链。',
+        fallbackNote2: '刚失败的模型即使排在链里也会被跳过。',
+        fallbackNote3: '同一轮最多切换一次，一次失败不会连环切换。',
+        fallbackNote4: '切换从下一条消息生效：失败的那一轮不会在新模型上重试。',
+        checkChain: '检查恢复链路',
+        chainMissing: '不在目录里',
+        chainHidden: '已隐藏',
+        chainUnprobed: '尚未检查',
+        recordsEmpty: '还没有探活记录。',
         seededNote: '来自已有会话日志的统计',
         resetUsage: '清空使用统计',
         resetUsageTitle: '删除本地记录的使用统计，无法撤销。',
@@ -299,6 +507,15 @@ window.__ModuleLoader__.load({
         effortUpstreamNote: 'DSH 不发送该参数，实际等级由上游决定',
         effortMeasuredHint: '网关实测支持这些档位，但还没写进配置',
         effortDeclareNow: '写进配置',
+        teamLabel: '启用智能体团队协作',
+        teamInfo: '关于智能体团队协作',
+        teamDescription: '通过共享任务板协调多个智能体的分工与进度，复杂任务表现更佳，token 开销也相应更高。',
+        teamFailed: '无法确认智能体团队协作设置已保存，请重试：{message}',
+        teamDisableTitle: '确认停用智能体团队协作？',
+        teamDisableText: '对话过程中停用智能体团队协作，将停止共享任务工具和团队协调指令。',
+        teamDisableWarning: '停用后可能影响缓存复用、增加后续 token 用量与开销，并影响当前任务的协作效果。',
+        teamDisableCancel: '取消',
+        teamDisableConfirm: '确认停用',
         search: '搜索模型',
         noModels: '没有匹配的模型。',
         unavailable: '不可用',
@@ -306,7 +523,7 @@ window.__ModuleLoader__.load({
         selected: '当前',
         fallbackTitleReached: '已自动切换模型',
         fallbackTitleElsewhere: '切换未生效',
-        fallbackTitleUnreached: '已尝试切换，本轮未恢复',
+        fallbackTitleUnreached: '已切换模型，下一条消息生效',
         fallbackReasonQuota: '额度已用尽',
         fallbackReasonRetired: '模型已下线',
         fallbackReasonProtocol: '该路由不支持此模型',
@@ -315,6 +532,9 @@ window.__ModuleLoader__.load({
         fallbackReasonError: '该路由报错',
         fallbackRanOn: '本轮实际使用',
         fallbackRevert: '改回',
+        fallbackContinue: '接续',
+        fallbackContinueFilled: '已填入草稿，可编辑后发送',
+        continuePrompt: '请从中断处继续上一条回答。',
         fallbackSuppress: '不再自动切换',
         fallbackSuppressed: '已关闭自动切换',
         dismiss: '知道了',
@@ -323,6 +543,46 @@ window.__ModuleLoader__.load({
         sourceProbe: '深度探活',
         sourcePassive: '真实请求',
         never: '未检查',
+        ctlIdle: '\u6307\u4ee4',
+        ctlKey: '\u2318K',
+        ctlDraft: '\u8349\u7a3f',
+        ctlChars: '\u5b57',
+        ctlAttach: '\u4e2a\u9644\u4ef6',
+        ctlQueued: '\u6761\u6392\u961f',
+        ctlRunning: '\u8fd0\u884c\u4e2d',
+        ctlWaiting: '\u7b49\u5f85\u4f60\u7684\u786e\u8ba4',
+        ctlAdjudicating: '\u89e3\u6790\u547d\u4ee4',
+        ctlClaimed: '\u547d\u4ee4\u5df2\u9501\u5b9a',
+        ctlSubmitting: '\u6267\u884c\u547d\u4ee4',
+        ctlSending: '\u53d1\u9001\u4e2d',
+        ctlEffort: '\u6863\u4f4d',
+        ctlAuto: '\u81ea\u52a8',
+        ctlPaletteOpen: '\u6253\u5f00\u6307\u4ee4\u9762\u677f',
+        paletteTitle: '\u6307\u4ee4',
+        paletteSend: '\u53d1\u9001',
+        paletteClear: '\u6e05\u7a7a\u8349\u7a3f',
+        paletteCopyId: '\u590d\u5236\u4f1a\u8bdd ID',
+        paletteCopied: '\u5df2\u590d\u5236',
+        paletteProbe: '\u63a2\u6d3b\u5f53\u524d\u6a21\u578b',
+        paletteProbed: '\u63a2\u6d3b\u5b8c\u6210',
+        paletteProbeFailed: '\u8def\u7531\u6ca1\u6709\u5e94\u7b54',
+        paletteSwitchFailed: '\u8be5\u6863\u4f4d\u88ab\u62d2\u7edd',
+        paletteSearch: '\u8f93\u5165\u4ee5\u7b5b\u9009\u6307\u4ee4',
+        paletteEmpty: '\u6ca1\u6709\u5339\u914d\u7684\u6307\u4ee4',
+        paletteWorking: '\u6267\u884c\u4e2d',
+        paletteFailed: '\u64cd\u4f5c\u5931\u8d25',
+        paletteNoLevels: '\u5c1a\u672a\u6d4b\u51fa\u6863\u4f4d\uff0c\u5148\u63a2\u6d3b\u8be5\u6a21\u578b',
+        paletteCurrent: '\u5f53\u524d',
+        paletteGroupSession: '\u672c\u4f1a\u8bdd',
+        paletteGroupModel: '\u6a21\u578b',
+        paletteGroupDiag: '\u8bca\u65ad',
+        paletteGroupManage: '\u7ba1\u7406',
+        paletteSync: '\u91cd\u62c9\u7f51\u5173\u76ee\u5f55',
+        paletteSyncDone: '\u76ee\u5f55\u5df2\u66f4\u65b0',
+        paletteProbeAll: '\u63a2\u6d3b\u672c\u8def\u7531\u5168\u90e8\u6a21\u578b',
+        paletteProbeAllSent: '\u5df2\u63d0\u4ea4\u63a2\u6d4b\uff0c\u7ed3\u679c\u89c1\u63a2\u6d3b\u8bb0\u5f55',
+        paletteFailoverLog: '\u6700\u8fd1\u7684\u6545\u969c\u5207\u6362',
+        paletteProbeRecords: '\u63a2\u6d3b\u8bb0\u5f55',
       },
     }
 
@@ -420,6 +680,10 @@ window.__ModuleLoader__.load({
       refresh: ['M13.4 8a5.4 5.4 0 1 1-1.6-3.8', 'M13.6 2v3.3h-3.3'],
       zap: ['M9.2 1.5 3.4 9.1h3.3l-.9 5.4L12.6 7H9.4Z'],
       spinner: ['M8 1.6a6.4 6.4 0 1 0 6.4 6.4'],
+      // A bin reads as "take this away" without needing the word.
+      trash: ['M3.1 4.5h9.8', 'M6.5 4.5V3.1h3v1.4', 'M4.6 4.5l.55 8.4h5.7l.55-8.4', 'M6.9 6.7v4.1', 'M9.1 6.7v4.1'],
+      // Two rails with handles: the manager is where the policy is set, not the model.
+      sliders: ['M2.4 5.2h11.2', 'M2.4 10.8h11.2', 'M5.6 3.2v4', 'M10.4 8.8v4'],
     }
 
     /**
@@ -460,7 +724,7 @@ window.__ModuleLoader__.load({
       const busy = props.pending === true
       return h('button', {
         type: 'button',
-        className: `llmm-ibtn${props.active === true ? ' llmm-on' : ''}${props.danger === true ? ' llmm-danger' : ''}${busy ? ' llmm-busy' : ''}`,
+        className: `llmm-ibtn${props.active === true ? ' llmm-on' : ''}${props.danger === true ? ' llmm-danger' : ''}${busy ? ' llmm-busy' : ''}${typeof props.className === 'string' && props.className !== '' ? ` ${props.className}` : ''}`,
         disabled: props.disabled === true || busy,
         'aria-label': props.label,
         'aria-pressed': props.active === true ? 'true' : undefined,
@@ -762,6 +1026,115 @@ window.__ModuleLoader__.load({
 .llmm-lv-5{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);font-weight:500}
 .llmm-lv-6{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);font-weight:600}
 .llmm-lv-7{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);font-weight:700}
+/* The label this plugin contributes inside the SHIPPED picker. It inherits the
+   owner's typography (it renders inside the owner's row), so only spacing, the
+   level chip and the badge are styled here — anything else would fight the
+   surrounding control. */
+.llmm-dlg-mask{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--dsw-alias-bg-mask-1);backdrop-filter:var(--dsw-mask-blur)}
+.llmm-dlg{position:relative;display:flex;flex-direction:column;width:min(960px,100%);height:min(720px,100%);overflow:hidden;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent);outline:none}
+.llmm-dlg-small{width:min(420px,100%);height:auto}
+.llmm-dlg-ask{z-index:1100}
+.llmm-dlg-head{flex:none;display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:0.5px solid var(--dsw-alias-border-l3)}
+.llmm-dlg-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.llmm-dlg-count{font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.llmm-dlg-gap{flex:1}
+.llmm-dlg-tabs{flex:none;display:flex;gap:14px;padding:0 14px;border-bottom:0.5px solid var(--dsw-alias-border-l3)}
+.llmm-dlg-body{flex:1;min-height:0;overflow:auto;padding:10px 14px}
+.llmm-dlg-copy{margin:0;font-size:12px;line-height:19px;color:var(--dsw-alias-label-secondary)}
+.llmm-dlg-foot{flex:none;display:flex;align-items:center;gap:8px;padding:9px 14px;border-top:0.5px solid var(--dsw-alias-border-l3)}
+.llmm-dlg-note{font-size:11px;color:var(--dsw-alias-state-success-primary)}
+.llmm-dlg-stale{flex:none;margin:0 20px 8px;padding:6px 10px;border-radius:var(--dsw-radius-md,8px);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
+.llmm-dlg-err{font-size:11px;color:var(--dsw-alias-state-error-primary)}
+.llmm-dlg-dirty{margin-right:auto;font-size:11px;color:var(--dsw-alias-label-secondary)}
+/* Every dialog button carries its own chrome. A bare <button> inherits the
+   browser's grey face, which reads as disabled next to our outlined controls. */
+.llmm-dlg-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:28px;padding:0 11px;margin-left:auto;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;cursor:pointer;transition:background .12s ease,border-color .12s ease,color .12s ease}
+.llmm-dlg-btn:hover:not([disabled]){background:var(--dsw-alias-interactive-bg-hover);border-color:var(--dsw-alias-border-l4)}
+.llmm-dlg-btn[disabled]{opacity:.4;cursor:default}
+.llmm-dlg-btn + .llmm-dlg-btn{margin-left:0}
+.llmm-dlg-btn-primary{border-color:transparent;background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground);font-weight:500}
+.llmm-dlg-btn-primary:hover:not([disabled]){border-color:transparent;background:var(--dsw-alias-button-primary-hover)}
+.llmm-dlg-btn-danger{color:var(--dsw-alias-state-error-primary)}
+.llmm-mg-toolbar{display:flex;align-items:center;gap:8px;padding:2px 0 10px}
+.llmm-mg-dirs{display:flex;flex-wrap:wrap;gap:4px 12px;padding:0 0 8px;font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.llmm-mg-dir{white-space:nowrap}
+.llmm-mg-search{flex:1;min-width:0;height:28px;padding:0 9px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px}
+.llmm-mg-search::placeholder{color:var(--dsw-alias-label-tertiary)}
+.llmm-mg-filter{height:28px;padding:0 6px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px}
+.llmm-mg-empty{padding:18px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:center}
+.llmm-mg-item{border-bottom:0.5px solid var(--dsw-alias-border-l1)}
+.llmm-mg-row{display:flex;align-items:center;gap:7px;min-height:32px;padding:3px 0}
+.llmm-mg-main{flex:1;min-width:0;display:flex;align-items:center;gap:7px;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.llmm-mg-name{flex:none;max-width:56%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dsw-alias-label-primary)}
+.llmm-mg-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.llmm-mg-when{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.llmm-mg-acts{flex:none;display:flex;align-items:center;gap:2px}
+/* The proficiency ladder and the removal control share one line: both are edits to
+   this row's membership, and separate lines made the expanded row read as a form. */
+.llmm-mg-extra{display:flex;align-items:center;gap:10px;justify-content:space-between;margin-top:6px}
+.llmm-mg-remove{flex:none;color:var(--dsw-alias-state-error-primary)}
+.llmm-mg-removed{margin-top:12px;padding-top:8px;border-top:0.5px solid var(--dsw-alias-border-l1)}
+.llmm-mg-removed-head{font-size:11px;line-height:14px;color:var(--dsw-alias-label-tertiary);padding:0 2px 4px}
+.llmm-mg-removed-row{opacity:.85}
+.llmm-mg-restore{margin-left:auto;flex:none}
+.llmm-sw-head{display:flex;align-items:center;gap:8px;padding:2px 2px 4px}
+.llmm-sw-title{font-size:11px;line-height:14px;color:var(--dsw-alias-label-tertiary);padding:8px 2px 3px}
+.llmm-sw-row{display:flex;align-items:baseline;gap:8px;padding:5px 2px;border-bottom:0.5px solid var(--dsw-alias-border-l1)}
+.llmm-sw-count{flex:none;font-size:11px;font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);min-width:14px}
+.llmm-sw-sub{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}
+.llmm-sw-arrow{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.llmm-sw-note{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);padding:9px 2px 0}
+/* The Session is where the failure happened, so its name is a link, not decoration:
+   underlined because it can be clicked, and capped so a long title cannot push the
+   timestamp off the row. */
+.llmm-sw-session{flex:none;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0;background:none;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;text-decoration:underline;text-decoration-color:var(--dsw-alias-border-l3);text-underline-offset:2px}
+.llmm-sw-session-flat{cursor:default;text-decoration:none;color:var(--dsw-alias-label-tertiary)}
+.llmm-sw-session:hover{color:var(--dsw-alias-label-primary);text-decoration-color:currentColor}
+.llmm-sw-session:focus-visible{outline:none;color:var(--dsw-alias-label-primary);text-decoration-color:currentColor}
+.llmm-mg-detail{padding:2px 0 10px 20px}
+.llmm-mg-also{padding-top:4px;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.llmm-mg-levels{display:flex;align-items:center;gap:4px;padding:4px 0}
+.llmm-mg-levels-label{width:52px;flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.llmm-mg-lvbtn{min-width:22px;height:20px;padding:0 5px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-xs);background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+.llmm-mg-lvbtn-on{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}
+.llmm-mg-records{display:flex;flex-direction:column}
+.llmm-mg-record{border-bottom:0.5px solid var(--dsw-alias-border-l1)}
+.llmm-fb-toggle{display:flex;align-items:center;gap:7px;padding:6px 0 10px;font-size:12px;color:var(--dsw-alias-label-primary)}
+.llmm-fb-list{display:flex;flex-direction:column;gap:4px;padding-bottom:8px}
+.llmm-fb-item{display:flex;align-items:center;gap:8px;padding:4px 6px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm)}
+.llmm-fb-index{width:16px;flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;text-align:right}
+.llmm-fb-name{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--dsw-alias-label-primary)}
+.llmm-fb-route{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.llmm-fb-add{display:flex;align-items:center;gap:8px;padding:2px 0 10px}
+.llmm-fb-add .llmm-dlg-btn{margin-left:0}
+.llmm-fb-picker{position:relative;flex:1;min-width:0}
+.llmm-fb-pick{width:100%;justify-content:space-between;gap:8px}
+.llmm-fb-pick-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-fb-pick-caret{flex:none;font-size:10px;color:var(--dsw-alias-label-tertiary)}
+.llmm-fb-pop{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;display:flex;flex-direction:column;max-height:280px;padding:6px;border-radius:var(--dsw-radius-md);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent)}
+.llmm-fb-pop-search{flex:none;margin-bottom:6px}
+.llmm-fb-pop-list{flex:1;min-height:0;overflow:auto}
+.llmm-fb-opt{display:flex;align-items:center;gap:7px;width:100%;padding:5px 7px;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;text-align:left;cursor:pointer}
+.llmm-fb-opt:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-fb-opt-on{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-fb-opt-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-fb-opt-route{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.llmm-fb-opt-flag{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary)}
+.llmm-fb-opt-bad .llmm-fb-opt-flag{color:var(--dsw-alias-state-error-primary)}
+.llmm-fb-notes{margin:0;padding:0 0 10px 16px}
+.llmm-fb-notes li{font-size:11px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
+.llmm-fb-check{display:flex;flex-direction:column;gap:6px;padding-bottom:10px}
+.llmm-fb-results{margin:0;padding:0 0 0 16px}
+.llmm-fb-results li{font-size:11px;line-height:18px}
+.llmm-fb-ok{color:var(--dsw-alias-state-success-primary)}
+.llmm-fb-bad{color:var(--dsw-alias-state-warn-primary)}
+.llmm-foot-manage{flex:none;display:inline-flex;align-items:center;gap:4px;margin:0;padding:2px 0;border:0;background:transparent;color:var(--dsw-alias-brand-primary);font:inherit;font-size:11px;line-height:16px;cursor:pointer}
+.llmm-foot-manage:hover{text-decoration:underline;text-underline-offset:2px}
+.llmm-label{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%}
+.llmm-label-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-label-badge{flex:none;font-size:10px;line-height:14px;padding:0 5px}
+.llmm-label .llmm-dot{width:6px;height:6px}
+
 /* Trend is decoration on top of the number, so it must never be the only signal:
    the title carries the same fact in words. */
 .llmm-trend{flex:none;font-size:10px;line-height:16px}
@@ -813,7 +1186,55 @@ window.__ModuleLoader__.load({
 .llmm-item-bar{position:absolute;left:7px;right:7px;bottom:2px;height:2px;border-radius:1px;background:var(--dsw-alias-bg-layer-1,var(--dsw-alias-border-l3));overflow:hidden}
 .llmm-item-bar-fill{display:block;height:100%;border-radius:1px;background:var(--dsw-alias-brand-primary,var(--dsw-alias-label-secondary));transition:width .2s ease}
 /* The sort control is a footer, not a row: it stays put while the list scrolls. */
-.llmm-menu-foot{flex:none;margin:3px 0 0;padding:4px 7px 2px;border-top:0.5px solid var(--dsw-alias-border-l3)}
+.llmm-menu-foot{flex:none;display:flex;align-items:center;justify-content:space-between;gap:10px;margin:3px 0 0;padding:5px 7px 3px;border-top:0.5px solid var(--dsw-alias-border-l3)}
+/* ── the switcher: one trigger, two lists, one level rail ─────────────────────
+   The level used to live in a popover of its own, on a second trigger. It is a
+   rail inside the panel now, so the trigger only has to name the value it
+   carries — and a slider needs the panel's width, not a button's. */
+.llmm-trigger-effort{flex:none;margin-left:6px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}
+.llmm-menu-close{flex:none;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1;cursor:pointer}
+.llmm-menu-close:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.llmm-tabs{flex:none;display:flex;gap:14px;margin:2px 0 3px;padding:0 7px;border-bottom:0.5px solid var(--dsw-alias-border-l3)}
+.llmm-tab{position:relative;padding:5px 0 6px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px;cursor:pointer}
+.llmm-tab:hover{color:var(--dsw-alias-label-primary)}
+.llmm-tab-on{color:var(--dsw-alias-label-primary)}
+.llmm-tab-on::after{content:'';position:absolute;left:0;right:0;bottom:-0.5px;height:2px;border-radius:1px;background:var(--dsw-alias-brand-primary)}
+.llmm-tab-count{margin-left:5px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.llmm-rail-section{flex:none;margin:4px 0 0;padding:6px 7px 0;border-top:0.5px solid var(--dsw-alias-border-l3)}
+.llmm-rail-head{display:flex;align-items:center;gap:8px}
+.llmm-rail-title{flex:none;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.llmm-rail-out{flex:1;min-width:0;color:var(--dsw-alias-label-primary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+.llmm-rail-auto{flex:none;padding:1px 8px;border:0;border-radius:var(--dsw-radius-xl);background:transparent;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;cursor:pointer}
+.llmm-rail-auto:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-rail-auto-on{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.llmm-rail-auto:disabled{opacity:.5;cursor:default}
+.llmm-opt{display:flex;flex-direction:column;gap:4px;padding:6px 12px 8px}
+.llmm-opt-row{display:flex;align-items:center;gap:8px}
+.llmm-opt-label{flex:1;min-width:0;font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-opt-note{font-size:11px;line-height:15px;color:var(--dsw-alias-label-tertiary)}
+.llmm-opt-bad{font-size:11px;line-height:15px;color:var(--dsw-alias-state-error-primary)}
+.llmm-switch{flex:none;position:relative;width:30px;height:17px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l3);cursor:pointer;transition:background .12s ease}
+.llmm-switch:hover:not(:disabled){background:var(--dsw-alias-border-l4)}
+.llmm-switch:disabled{opacity:.45;cursor:default}
+.llmm-switch-on,.llmm-switch-on:hover:not(:disabled){background:var(--dsw-alias-button-primary-fill)}
+.llmm-switch-knob{position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:var(--dsw-alias-bg-layer-1);transition:transform .12s ease}
+.llmm-switch-on .llmm-switch-knob{transform:translateX(13px)}
+.llmm-opt-confirm{display:flex;flex-direction:column;gap:4px;margin-top:2px;padding:8px 10px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:var(--dsw-alias-bg-layer-2)}
+.llmm-opt-confirm-title{font-size:12px;line-height:17px;color:var(--dsw-alias-label-primary)}
+.llmm-opt-confirm-text{font-size:11px;line-height:15px;color:var(--dsw-alias-label-tertiary)}
+.llmm-opt-confirm-acts{display:flex;justify-content:flex-end;gap:6px;margin-top:2px}
+.llmm-rail{width:100%;height:14px;margin:6px 0 0;padding:0;appearance:none;-webkit-appearance:none;background:transparent;cursor:pointer}
+.llmm-rail::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:var(--dsw-alias-border-l3)}
+.llmm-rail::-moz-range-track{height:4px;border-radius:2px;background:var(--dsw-alias-border-l3)}
+.llmm-rail::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:12px;height:12px;margin-top:-4px;border-radius:50%;background:var(--dsw-alias-brand-primary);border:2px solid var(--dsw-alias-bg-layer-1)}
+.llmm-rail::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:var(--dsw-alias-brand-primary);border:2px solid var(--dsw-alias-bg-layer-1)}
+.llmm-rail:disabled{cursor:default;opacity:.5}
+.llmm-rail-ticks{display:flex;justify-content:space-between;margin-top:-1px;padding:0 1px}
+.llmm-rail-tick{width:1px;height:4px;background:var(--dsw-alias-border-l3)}
+.llmm-rail-tick-on{background:var(--dsw-alias-brand-primary)}
+.llmm-rail-scale{display:flex;justify-content:space-between;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+.llmm-rail-empty{display:flex;align-items:center;gap:8px;padding:0 0 6px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+.llmm-row-probe{flex:none;display:inline-flex;align-items:center;margin-right:1px}
 .llmm-empty{margin:2px 0;padding:12px;border:1px dashed var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-lg);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:center}
 /* The banner is a bounded block, not a one-line strip. It reports a switch and a
    reason, and the reason used to be the provider's raw error text inlined in full
@@ -831,8 +1252,64 @@ window.__ModuleLoader__.load({
    provider's exact wording stays available without taking over the composer. */
 .llmm-banner-why{color:var(--dsw-alias-state-warn-label);opacity:.85;font-size:11px;line-height:16px;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden;min-width:0}
 .llmm-banner-acts{flex:none;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.llmm-banner-cont{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
 .llmm-banner-off{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap}
 .llmm-btn-quiet{padding:1px 6px;font-size:11px;line-height:16px}
+/* -- The composer controller ------------------------------------------------
+   Additive, directly above the composer card. The editor keeps every shipped
+   seat (IME, paste, slash adjudication, mentions, attachments); this layer only
+   reads the input state it publishes and changes shape. Idle is a hairline, a
+   draft is a meter, a turn in flight is a capsule with a clock. Theme tokens
+   only -- no new materials. */
+/* A control cluster, not a toolbar: the row keeps the card's width but the rail only
+   takes what it needs and sits against the card's right edge. */
+.llmm-ctl{display:flex;align-items:center;gap:6px;min-width:0;height:26px}
+.llmm-ctl-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-label-tertiary)}
+.llmm-ctl[data-mode="running"] .llmm-ctl-dot{background:var(--dsw-alias-state-success-primary);animation:llmm-ctl-pulse 1.6s ease-in-out infinite}
+.llmm-ctl[data-mode="busy"] .llmm-ctl-dot{background:var(--dsw-alias-brand-primary);animation:llmm-ctl-pulse 1.1s ease-in-out infinite}
+.llmm-ctl-text{min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.llmm-ctl[data-mode="running"] .llmm-ctl-text,.llmm-ctl[data-mode="busy"] .llmm-ctl-text{color:var(--dsw-alias-label-secondary)}
+.llmm-ctl-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-tertiary);opacity:.7;cursor:pointer;transition:opacity .15s ease,background-color .15s ease,color .15s ease}
+.llmm-ctl-icon:hover,.llmm-ctl-icon:focus-visible{opacity:1;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover);outline:none}
+/* The shortcut is a standing hint, not a hover reward. Hiding it to opacity 0
+   left a blank slot between the gear and the model trigger — a gap that read as
+   broken spacing rather than as restraint. */
+.llmm-ctl-key{flex:none;padding:0 6px;border:0;border-radius:999px;background:transparent;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:11px;line-height:16px;cursor:pointer;opacity:.75;transition:opacity .16s ease,color .16s ease,background-color .16s ease}
+.llmm-ctl-key:hover,.llmm-ctl-key:focus-visible{opacity:1;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover);outline:none}
+@keyframes llmm-ctl-pulse{0%,100%{opacity:.45}50%{opacity:1}}
+/* The palette is a fixed surface: the composer card clips its own children, so a
+   popover born inside it would be cut at the card's edge. */
+/* Same material as the picker card: the theme's menu fill behind the content,
+   the elevation stroke instead of a hand-rolled border and a heavy drop shadow.
+   The overlay scrim is the colour *behind* a dialog, not a surface — painting a
+   560px panel with it is what made this read as a different product. */
+.llmm-pal{position:fixed;left:50%;bottom:132px;transform:translateX(-50%);z-index:90;width:min(560px,calc(100vw - 32px));max-height:min(420px,50vh);display:flex;flex-direction:column;isolation:isolate;border:0;border-radius:var(--dsw-radius-lg);overflow:hidden;box-shadow:var(--dsw-elevation-prominent,0 0 0 .5px var(--dsw-alias-border-l1),0 3px 8px rgba(0,0,0,.04),0 0 20px rgba(0,0,0,.05));--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);font-size:13px;color:var(--dsw-alias-label-primary)}
+.llmm-pal::before{content:'';position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-2,var(--dsw-alias-bg-overlay)));backdrop-filter:var(--dsw-menu-backdrop-filter,none)}
+.llmm-pal-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px 6px;border-bottom:0.5px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+.llmm-pal-note{color:var(--dsw-alias-brand-primary);text-transform:none;letter-spacing:0}
+.llmm-pal-list{flex:1;min-height:0;margin:0;padding:4px;list-style:none;overflow:auto}
+.llmm-pal-item{margin:0;padding:0}
+.llmm-pal-run{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;border:0;border-radius:var(--dsw-radius-md);background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.llmm-pal-on .llmm-pal-run{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-pal-run:focus-visible{outline:none;background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-pal-off .llmm-pal-run{opacity:.45;cursor:default}
+.llmm-pal-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-pal-hint{flex:none;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;font-variant-numeric:tabular-nums;max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The palette is a command list, not a level picker: the levels live one level
+   down, and the root carries a search field, group headings and per-row answers.
+   A row that is asked to do work says so on its own line rather than in a toast,
+   because the answer belongs to the command, not to the panel. */
+.llmm-pal-search{flex:1;min-width:0;height:22px;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;outline:none}
+.llmm-pal-search::placeholder{color:var(--dsw-alias-label-tertiary)}
+.llmm-pal-search::-webkit-search-cancel-button{display:none}
+.llmm-pal-back{flex:none;padding:0;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
+.llmm-pal-back:hover{color:var(--dsw-alias-label-primary)}
+.llmm-pal-group{padding:7px 8px 3px;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:14px;user-select:none}
+.llmm-pal-group:first-child{padding-top:2px}
+.llmm-pal-empty{padding:14px 8px;color:var(--dsw-alias-label-tertiary);font-size:12px;text-align:center}
+.llmm-pal-spin{flex:none;width:11px;height:11px;border:1.5px solid var(--dsw-alias-border-l3);border-top-color:var(--dsw-alias-label-primary);border-radius:50%;animation:llmm-rotate .7s linear infinite}
+.llmm-pal-ok{color:var(--dsw-alias-label-secondary)}
+.llmm-pal-bad{color:var(--dsw-alias-state-error-primary)}
 `
 
     /**
@@ -1381,8 +1858,121 @@ window.__ModuleLoader__.load({
      * @param {object} props - owner share plus this registration's inject face.
      * @returns {object} the trigger and, while open, the menu.
      */
+    /**
+     * The session-options row the shipped model menu appends: the agent-team switch.
+     *
+     * Taking the seat cannot take that row with it. `renderSlot` is injected only
+     * into entries that DECLARE children, and declaring this one is refused because
+     * the shipped entry already owns the declaration — a second `children` table
+     * throws `slot "…" is already declared` (harness
+     * `packages/client/ui-slots/src/index.ts:1280`; `ui-renderer/src/client/scoped-slots.tsx:76`
+     * throws `SlotOwnershipError` for a key outside an entry's declaration). The
+     * capability is therefore RE-PROVIDED against the same projection and the same
+     * remote call the shipped row uses, instead of disappearing with the seat. If a
+     * future framework lets a replacement inherit its children, delete this row and
+     * go back to `props.renderSlot(...)`.
+     *
+     * Rules mirrored from `ui-agent-team/TeamModeToggle`: no switch for a child
+     * session, no switch when the capability projection is absent, and turning it
+     * off mid-conversation asks first — the confirmation is inline here because the
+     * shipped confirmation lives in a store this plugin does not own.
+     *
+     * @param props - session, lock state, standard hooks, the switch verb, and copy.
+     * @returns the row, or nothing when the capability is absent for this session.
+     */
+    function TeamModeRow(props) {
+      const { sessionId, locked, setTeamEnabled, useProjection, t } = props
+      // Presence of the hook cannot change under a mounted entry, so the
+      // conditional call below keeps the hook order stable.
+      const readProjection = typeof useProjection === 'function' ? useProjection : null
+      const mode = readProjection === null ? undefined : readProjection('agentTeam')
+      const selection = readProjection === null ? undefined : readProjection('modelSelection')
+      const addressedChild = typeof props.useSession === 'function'
+        ? props.useSession(snapshot => snapshot.subagent !== null) === true
+        : false
+      const listedChild = typeof props.useSessions === 'function' && sessionId !== ''
+        ? props.useSessions(state => state.byId[sessionId]?.origin === 'subagent') === true
+        : false
+      const [pending, setPending] = useState(false)
+      const [confirming, setConfirming] = useState(false)
+      const [failure, setFailure] = useState('')
+      if (mode === undefined || mode === null || typeof mode !== 'object') return null
+      if (addressedChild || listedChild) return null
+      const enabled = mode.enabled === true
+      const busy = pending
+      const commit = (next) => {
+        if (typeof setTeamEnabled !== 'function') {
+          setFailure(t('teamFailed').replace('{message}', 'agentTeams is not available in this client'))
+          return
+        }
+        setPending(true)
+        setFailure('')
+        Promise.resolve()
+          .then(() => setTeamEnabled(sessionId, next))
+          .then((response) => {
+            if (response !== undefined && response !== null && response.ok === false) {
+              const detail = response.error === undefined || response.error === null
+                ? ''
+                : String(response.error.message ?? '')
+              setFailure(t('teamFailed').replace('{message}', detail))
+            }
+          }, (error) => {
+            setFailure(t('teamFailed').replace('{message}', String(error?.message ?? error)))
+          })
+          .then(() => { setPending(false) })
+      }
+      const toggle = () => {
+        if (busy) return
+        // Turning teamwork off after the session has already run a model choice is
+        // the case the shipped row confirms: the next turn keeps its cache only if
+        // it keeps the same tools.
+        if (enabled && selection !== undefined && selection !== null
+          && selection.lastUsed !== undefined && selection.lastUsed !== null) {
+          setConfirming(true)
+          return
+        }
+        commit(!enabled)
+      }
+      return h('div', { className: 'llmm-opt' },
+        h('div', { className: 'llmm-opt-row' },
+          h('span', { className: 'llmm-opt-label', title: t('teamInfo') }, t('teamLabel')),
+          h('button', {
+            type: 'button',
+            role: 'switch',
+            'aria-checked': enabled,
+            'aria-label': t('teamLabel'),
+            className: `llmm-switch${enabled ? ' llmm-switch-on' : ''}`,
+            disabled: locked === true || busy || selection === undefined,
+            onClick: toggle,
+          }, h('span', { className: 'llmm-switch-knob', 'aria-hidden': true })),
+        ),
+        failure !== ''
+          ? h('div', { className: 'llmm-opt-bad' }, failure)
+          : h('div', { className: 'llmm-opt-note' }, t('teamDescription')),
+        confirming
+          ? h('div', { className: 'llmm-opt-confirm', role: 'alertdialog', 'aria-label': t('teamDisableTitle') },
+            h('div', { className: 'llmm-opt-confirm-title' }, t('teamDisableTitle')),
+            h('div', { className: 'llmm-opt-confirm-text' }, t('teamDisableText')),
+            h('div', { className: 'llmm-opt-confirm-text' }, t('teamDisableWarning')),
+            h('div', { className: 'llmm-opt-confirm-acts' },
+              h('button', {
+                type: 'button',
+                className: 'llmm-dlg-btn',
+                onClick: () => setConfirming(false),
+              }, t('teamDisableCancel')),
+              h('button', {
+                type: 'button',
+                className: 'llmm-dlg-btn llmm-dlg-btn-primary',
+                onClick: () => { setConfirming(false); commit(false) },
+              }, t('teamDisableConfirm')),
+            ),
+          )
+          : null,
+      )
+    }
+
     function Picker(props) {
-      const { available, directory, load, select, locked } = props
+      const { available, directory, load, select, locked, setTeamEnabled } = props
       const state = useSyncExternalStore(
         React.useCallback(fn => (directory ? directory.subscribe(fn) : () => {}), [directory]),
         React.useCallback(() => (directory ? directory.getSnapshot() : null), [directory]),
@@ -1401,13 +1991,14 @@ window.__ModuleLoader__.load({
       // flight, so a click answers immediately and cannot be double-fired.
       const [detailKeys, setDetailKeys] = useState(() => new Set())
       const [pending, setPending] = useState('')
-      // The level menu is a separate surface from the model list on purpose: it is
-      // reached without opening the list, which is the whole point of putting it on
-      // the trigger. Two open surfaces would fight over the same dismiss handler.
-      const [levelOpen, setLevelOpen] = useState(false)
-      const [levelPos, setLevelPos] = useState(null)
-      const levelRef = useRef(null)
-      const levelMenuRef = useRef(null)
+      // One entry, two lists. `all` stays the default so a first-time reader sees
+      // the whole catalogue without having to discover a tab first; `frequent` is
+      // the shortcut back to the models this profile actually reaches for.
+      const [tab, setTab] = useState('all')
+      // The slider's position while a drag is in flight. React cannot commit fast
+      // enough to follow the pointer on its own, so the thumb follows this and the
+      // selection is committed once the value lands on a level.
+      const [railIndex, setRailIndex] = useState(null)
       // A tooltip channel of this component's own. The panel has one, but each is
       // scoped to its own subtree, and the actions need the label the icon cannot
       // spell — the same reason the panel's icon buttons carry one.
@@ -1844,18 +2435,17 @@ window.__ModuleLoader__.load({
           && row.routes.some(entry => entry.route === current.provider)
           ? current.provider
           : row.route
-        // `retainedEffort` is the level NAME ("High"), not its id ("high"): the shipped
-        // directory spells it for display. Passing it straight through made the adapter
-        // reject the selection with `does not support reasoning effort "High"`, so the
-        // name is mapped back through this model's own declaration and dropped when it
-        // cannot be resolved — an unknown level must never be sent as if it were valid.
-        const retainedEffort = current !== null && current.provider === provider && current.model === row.model
-          && state !== null && state !== undefined && state.retainedEffort !== undefined
-          ? (reasoningOf(provider, row.model)?.efforts ?? []).find(
-            level => level.name === state.retainedEffort || level.id === state.retainedEffort,
-          )?.id
+        // Only an EXPLICIT level travels with the re-pick. `state.retainedEffort` is the
+        // effective level NAME — since 0.2.2 that includes the adapter default — so
+        // reusing it would pin an automatic setting the first time the same model is
+        // chosen again, and a level this route does not declare must never be sent.
+        const explicitEffort = current !== null && current.provider === provider && current.model === row.model
+          ? current.reasoningEffort
           : undefined
-        const reuseEffort = retainedEffort
+        const reuseEffort = explicitEffort !== undefined
+          && (reasoningOf(provider, row.model)?.efforts ?? []).some(level => level.id === explicitEffort)
+          ? explicitEffort
+          : undefined
         const result = await select({
           provider,
           model: row.model,
@@ -1870,7 +2460,7 @@ window.__ModuleLoader__.load({
         }
         callHost({ action: 'use', route: provider, model: row.model }).catch(() => {})
         setOpen(false)
-      }, [select, current, state])
+      }, [select, current, reasoningOf])
 
       // Switching which route serves the SAME model. The current level is carried over
       // only when that route declares it: levels are a per-model capability, and a
@@ -1961,55 +2551,38 @@ window.__ModuleLoader__.load({
           : effortState === 'measured'
             ? `${t('effortMeasuredHint')} · ${currentMeasured.join(' · ')}`
             : t('effortUpstreamNote')
-      const levelChoices = useMemo(() => {
-        if (currentReasoning === undefined) return []
-        return [
-          // Offered only when the model names no default: when it does, that level is
-          // the provider's own answer and a separate "default" row would be a second
-          // spelling of it.
-          ...currentReasoning.defaultEffort === undefined
-            ? [{ key: '__default__', effort: undefined, label: t('effortDefaultFull') }]
-            : [],
-          ...currentReasoning.efforts.map(level => ({
-            key: level.id,
-            effort: level.id,
-            label: level.name === '' ? level.id : level.name,
-            description: level.description,
-          })),
-        ]
-      }, [currentReasoning, t])
+      // The slider is the only level control now: the trigger names the level, the
+      // panel moves it. Index 0 is "auto" — no explicit level, which the platform
+      // reads as the adapter's own default — and every declared level follows it.
+      const railLevels = currentReasoning === undefined ? [] : currentReasoning.efforts
+      const railStop = railLevels.length === 0
+        ? 0
+        : selectedEffort === undefined
+          ? 0
+          : Math.max(0, railLevels.findIndex(level => level.id === selectedEffort) + 1)
+      const railValue = Math.min(railIndex === null ? railStop : railIndex, railLevels.length)
+      // Index 0 is "auto" — the adapter's own default — but the prototype's output
+      // names that default ("自动 · High"): "Default (upstream)" is jargon, and the
+      // level that actually runs is the model's declared default, not a mystery.
+      const defaultName = railLevels.length === 0
+        ? ''
+        : (railLevels.find(level => level.id === currentReasoning?.defaultEffort)?.name
+          || currentReasoning?.defaultEffort
+          || '')
+      const railName = railValue === 0
+        ? (defaultName !== '' ? `${t('ctlAuto')} · ${defaultName}` : t('effortDefaultFull'))
+        : (railLevels[railValue - 1]?.name || railLevels[railValue - 1]?.id || '')
+      const railAria = railLevels.length === 0
+        ? effortTitle
+        : railValue === 0
+          ? (defaultName !== '' ? `${defaultName}, auto` : 'auto')
+          : `${railName}, ${railLevels[railValue - 1].id}`
 
-      const placeLevel = useCallback(() => {
-        const node = levelRef.current
-        if (node === null) return
-        const rect = node.getBoundingClientRect()
-        const width = 176
-        const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - width - 8))
-        setLevelPos({
-          left: `${left}px`,
-          width: `${width}px`,
-          bottom: `${Math.max(8, window.innerHeight - rect.top + 8)}px`,
-        })
-      }, [])
-
+      // A different model carries a different level set; a leftover in-flight index
+      // would point past the end of it.
       useEffect(() => {
-        if (!levelOpen) return undefined
-        placeLevel()
-        const onDown = (event) => {
-          if (levelMenuRef.current !== null && levelMenuRef.current.contains(event.target)) return
-          if (levelRef.current !== null && levelRef.current.contains(event.target)) return
-          setLevelOpen(false)
-        }
-        const onKey = (event) => { if (event.key === 'Escape') setLevelOpen(false) }
-        document.addEventListener('mousedown', onDown, true)
-        document.addEventListener('keydown', onKey)
-        window.addEventListener('resize', placeLevel)
-        return () => {
-          document.removeEventListener('mousedown', onDown, true)
-          document.removeEventListener('keydown', onKey)
-          window.removeEventListener('resize', placeLevel)
-        }
-      }, [levelOpen, placeLevel])
+        setRailIndex(null)
+      }, [current === null ? '' : current.provider, current === null ? '' : current.model])
 
       // Changing a level is a selection in its own right — it names the same model
       // the session already has and only moves the effort — so it goes through the
@@ -2028,8 +2601,16 @@ window.__ModuleLoader__.load({
           setFailure(error && error.message ? error.message : JSON.stringify(error))
           return
         }
-        setLevelOpen(false)
       }, [select, current])
+
+      // A range input reports every step it crosses, and a slider that snaps has no
+      // free-hand position to hold, so the value is committed as it lands.
+      const commitRail = useCallback((index) => {
+        setRailIndex(index)
+        const level = index === 0 ? undefined : railLevels[index - 1]?.id
+        if (index > 0 && level === undefined) return
+        applyEffort(level)
+      }, [applyEffort, railLevels])
 
       if (available !== true) return null
 
@@ -2155,6 +2736,13 @@ window.__ModuleLoader__.load({
                   }))
                 : null,
             ),
+            // The ECG button answers "is this route actually alive?" right where the
+            // row already says it is not: the status and the reason are replaced in
+            // place, and the same probe measures the model's level set.
+            isProblem(status)
+              ? h('span', { className: 'llmm-row-probe' },
+                act('pulse', t('probe'), false, () => probe(row), `probe:${key}`, true))
+              : null,
             h('button', {
               type: 'button',
               className: `llmm-chevron${expanded ? ' llmm-chevron-open' : ''}`,
@@ -2255,8 +2843,55 @@ window.__ModuleLoader__.load({
       // instead of being nested in the composer row. See the createPortal note
       // above the React require for why the ancestry, not the z-index, is the
       // thing that decides whether the sidebar can paint over this card.
+      // The curated tab is exactly the three sections the list already lifts, with
+      // the catalogue left out: "frequent" means what the sort already means, so the
+      // two tabs cannot disagree about which models those are.
+      const curatedCount = sections.pinned.length + sections.favorites.length + sections.frequent.length
+      const frequentRows = [
+        sections.pinned.length > 0
+          ? renderSection('llmm-pinned', t('sectionPinned'), orderRows(sections.pinned))
+          : null,
+        sections.favorites.length > 0
+          ? renderSection('llmm-favorites', t('sectionFavorites'), orderRows(sections.favorites))
+          : null,
+        sections.frequent.length > 0
+          ? renderSection('llmm-frequent', t('sectionFrequent'), orderRows(sections.frequent), true)
+          : null,
+      ]
+      // Each route keeps its own section with the lifted rows removed, so a model is
+      // never listed twice and the menu still offers the whole catalogue. Hidden
+      // models come last and offered back: hiding would otherwise be a one-way door.
+      const catalogueRows = [
+        sections.groups.map(group => renderSection(
+          group.route, group.name || group.route, orderRows(group.rows),
+        )),
+        sections.hidden.length > 0
+          ? renderSection('llmm-hidden', t('sectionHidden'), orderRows(sections.hidden))
+          : null,
+      ]
+
+      // Arrow roaming is the one keyboard affordance the shipped picker has that a
+      // mouse-only list does not, and it has to work from the search box because that
+      // is where the hands already are: the list is long, and reaching for the mouse
+      // to pick the third hit is the slow half of a search.
+      const roam = event => {
+        if (event.altKey || event.metaKey || event.ctrlKey) return
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+        const buttons = [...event.currentTarget.querySelectorAll('.llmm-item-select')]
+          .filter(button => button.disabled !== true)
+        if (buttons.length === 0) return
+        event.preventDefault()
+        const at = buttons.indexOf(document.activeElement)
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        const next = at < 0
+          ? (step === 1 ? 0 : buttons.length - 1)
+          : (at + step + buttons.length) % buttons.length
+        buttons[next].focus()
+      }
+
       const card = h('div', {
         className: 'llmm-menu', style: position, ref: menuRef, role: 'dialog', 'aria-label': t('pickerTitle'),
+        onKeyDown: roam,
       },
         h('div', { className: 'llmm-menu-head' },
           h('input', {
@@ -2266,39 +2901,124 @@ window.__ModuleLoader__.load({
             autoFocus: true,
             onChange: event => setQuery(event.target.value),
           }),
+          h('button', {
+            type: 'button',
+            className: 'llmm-menu-close',
+            'aria-label': t('panelClose'),
+            title: t('panelClose'),
+            onClick: () => setOpen(false),
+          }, '\u2715'),
+        ),
+        // Two lists, one switch. The counts sit on the tabs because they are the
+        // fastest answer to "is anything in there?" without opening it.
+        h('div', { className: 'llmm-tabs', role: 'tablist' },
+          h('button', {
+            type: 'button',
+            role: 'tab',
+            'aria-selected': tab === 'frequent',
+            className: `llmm-tab${tab === 'frequent' ? ' llmm-tab-on' : ''}`,
+            onClick: () => setTab('frequent'),
+          },
+            t('tabFrequent'),
+            curatedCount > 0 ? h('span', { className: 'llmm-tab-count' }, String(curatedCount)) : null,
+          ),
+          h('button', {
+            type: 'button',
+            role: 'tab',
+            'aria-selected': tab === 'all',
+            className: `llmm-tab${tab === 'all' ? ' llmm-tab-on' : ''}`,
+            onClick: () => setTab('all'),
+          },
+            t('tabAll'),
+            h('span', { className: 'llmm-tab-count' }, String(shown)),
+          ),
         ),
         h('div', { className: 'llmm-menu-body' },
           shown === 0 ? h('div', { className: 'llmm-empty' }, t('noModels')) : null,
-          // Pins and favorites first, across every route. Below, each route
-          // keeps its own section with those rows removed, so a model is never
-          // listed twice and the menu still offers the whole catalogue.
-          sections.pinned.length > 0
-            ? renderSection('llmm-pinned', t('sectionPinned'), orderRows(sections.pinned))
-            : null,
-          sections.favorites.length > 0
-            ? renderSection('llmm-favorites', t('sectionFavorites'), orderRows(sections.favorites))
-            : null,
-          // Most used, between the user's explicit choices and the raw catalogue:
-          // earned by use rather than declared by hand. This is the section that
-          // gets the progress bars, since it is the one built from usage.
-          sections.frequent.length > 0
-            ? renderSection('llmm-frequent', t('sectionFrequent'), orderRows(sections.frequent), true)
-            : null,
-          sections.groups.map(group => renderSection(
-            group.route, group.name || group.route, orderRows(group.rows),
-          )),
-          // Hidden models last, and offered back. Without this section hiding from
-          // the picker would be a one-way door: the row leaves the menu and the
-          // only way to undo it is the settings page.
-          sections.hidden.length > 0
-            ? renderSection('llmm-hidden', t('sectionHidden'), orderRows(sections.hidden))
-            : null,
+          tab === 'frequent'
+            ? curatedCount === 0
+              ? h('div', { className: 'llmm-empty' }, t('frequentEmpty'))
+              : frequentRows
+            : [...frequentRows, ...catalogueRows],
         ),
+        // The level control lives here, not on the trigger: a slider cannot be put on
+        // a 100px button, and the panel is already where the model's capability is
+        // being read. Index 0 is "auto" — the provider's own default.
+        h('div', { className: 'llmm-rail-section' },
+          h('div', { className: 'llmm-rail-head' },
+            h('span', { className: 'llmm-rail-title' }, t('effortName')),
+            h('output', { className: 'llmm-rail-out' }, railName),
+            h('button', {
+              type: 'button',
+              className: `llmm-rail-auto${railValue === 0 ? ' llmm-rail-auto-on' : ''}`,
+              'aria-pressed': railValue === 0,
+              disabled: railLevels.length === 0 || locked,
+              title: t('effortDefaultFull'),
+              onClick: () => { commitRail(0) },
+            }, t('ctlAuto')),
+          ),
+          railLevels.length === 0
+            // No declared levels is an unmeasured state, not an error one: the panel
+            // offers the measurement instead of a dead control.
+            ? h('div', { className: 'llmm-rail-empty' },
+              h('span', null, effortState === 'measured' ? t('effortMeasuredHint') : effortTitle),
+              h('button', {
+                type: 'button',
+                className: 'llmm-inline-act',
+                disabled: current === null || pending !== '',
+                onClick: () => {
+                  if (current !== null) probe({ route: current.provider, model: current.model })
+                },
+              }, t('railProbe')),
+            )
+            : h(React.Fragment, null,
+              h('input', {
+                type: 'range',
+                className: 'llmm-rail',
+                min: 0,
+                max: railLevels.length,
+                step: 1,
+                value: railValue,
+                disabled: locked,
+                'aria-label': t('effortName'),
+                'aria-valuetext': railAria,
+                onChange: event => { commitRail(Number(event.target.value)) },
+              }),
+              h('div', { className: 'llmm-rail-ticks', 'aria-hidden': true },
+                Array.from({ length: railLevels.length + 1 }, (unused, index) => h('span', {
+                  key: index,
+                  className: `llmm-rail-tick${index === railValue ? ' llmm-rail-tick-on' : ''}`,
+                }))),
+              h('div', { className: 'llmm-rail-scale' },
+                h('span', null, t('ctlAuto')),
+                h('span', null, railLevels[railLevels.length - 1].name || railLevels[railLevels.length - 1].id),
+              ),
+            ),
+        ),
+        // Session options the shipped menu appends after its model and reasoning
+        // controls. That child seat is `conversation.input.model.options`, and the
+        // agent-team switch lives in it. A replacing entry cannot render the seat —
+        // see TeamModeRow — so the capability is provided here instead, after the
+        // level control, in the same reading order.
+        h(TeamModeRow, {
+          sessionId: typeof props.sessionId === 'string' ? props.sessionId : '',
+          locked: locked === true,
+          setTeamEnabled,
+          useSession: props.useSession,
+          useSessions: props.useSessions,
+          useProjection: props.useProjection,
+          t,
+        }),
         // The sort control earns its place only once there is usage to sort by;
         // on a fresh profile it would offer three orderings that all look alike.
-        usageSeen > 0
-          ? h('div', { className: 'llmm-menu-foot' },
-            h('div', { className: 'llmm-sort' },
+        h('div', { className: 'llmm-menu-foot' },
+          h('button', {
+            type: 'button',
+            className: 'llmm-foot-manage',
+            onClick: () => { setOpen(false); openManager() },
+          }, t('managerOpen')),
+          usageSeen > 0
+            ? h('div', { className: 'llmm-sort' },
               h('span', { className: 'llmm-sort-label' }, t('sortLabel')),
               ['default', 'level', 'heat'].map(mode => h('button', {
                 key: mode,
@@ -2309,60 +3029,10 @@ window.__ModuleLoader__.load({
                 // allowed to settle at the same time.
                 onClick: () => { setFrozenFlags(null); setSortMode(mode) },
               }, t(mode === 'default' ? 'sortDefault' : mode === 'level' ? 'sortLevel' : 'sortHeat'))),
-            ),
-          )
-          : null,
-        failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,
-      )
-
-      // The level menu's rows are the model's own declaration, never a fixed list:
-      // one gateway accepts low/high/max and rejects medium, another accepts all
-      // seven, and a model that always thinks rejects "off" outright. Rendering a
-      // hardcoded set would offer choices that fail on submit.
-      const levelMenu = h('div', {
-        ref: levelMenuRef,
-        className: 'llmm-effort-menu',
-        style: levelPos,
-        role: 'menu',
-        'aria-label': t('effortName'),
-      },
-        // A measured-but-undeclared model gets the explanation and the one action that
-        // unlocks it, never a list of levels that would be rejected on click.
-        effortState === 'measured'
-          ? h('div', { className: 'llmm-effort-note' }, t('effortMeasuredHint'))
-          : null,
-        effortState === 'measured'
-          ? h('button', {
-            type: 'button',
-            className: 'llmm-effort-item llmm-effort-declare',
-            onClick: () => {
-              if (current !== null) declare({ route: current.provider, model: current.model })
-              setLevelOpen(false)
-            },
-          }, t('effortDeclareNow'), h('span', { className: 'llmm-effort-mark', 'aria-hidden': true }, '↵'))
-          : null,
-        effortState === 'measured'
-          ? null
-          : levelChoices.length === 0
-            ? h('div', { className: 'llmm-effort-note' }, effortTitle)
+            )
             : null,
-        levelChoices.map(choice => {
-          const on = choice.effort === undefined
-            ? effectiveEffort === undefined
-            : choice.effort === effectiveEffort
-          return h('button', {
-            key: choice.key,
-            type: 'button',
-            role: 'menuitemradio',
-            'aria-checked': on,
-            className: `llmm-effort-item${on ? ' llmm-effort-on' : ''}`,
-            title: choice.description === undefined ? choice.label : choice.description,
-            onClick: () => { applyEffort(choice.effort) },
-          },
-            h('span', null, choice.label),
-            h('span', { className: 'llmm-effort-mark', 'aria-hidden': true }, on ? '✓' : ''),
-          )
-        }),
+        ),
+        failure !== '' ? h('div', { className: 'llmm-err', style: { padding: '8px' } }, failure) : null,
       )
 
       return h(React.Fragment, null,
@@ -2380,44 +3050,20 @@ window.__ModuleLoader__.load({
             onClick: () => {
               setFrozenFlags(null)
               setDetailKeys((currentKeys) => (currentKeys.size === 0 ? currentKeys : new Set()))
-              // Two portals anchored to the same composer cannot both own the
-              // document-level dismiss, so opening one closes the other.
-              setLevelOpen(false)
               setOpen(value => !value)
             },
           },
             h('span', { className: 'llmm-trigger-label' }, triggerLabel),
+            // The level rides on the same control as the model: one entry, one panel.
+            // It is a label and not a second button because the panel owns moving it,
+            // and two controls 4px apart read as a segmented switch.
+            current === null
+              ? null
+              : h('span', { className: 'llmm-trigger-effort', title: effortTitle }, effortLabel),
             h('span', { 'aria-hidden': true }, '▾'),
-          ),
-          // The second segment answers "what am I getting?" even where it cannot be
-          // changed: an omitted level is NOT "no thinking" — on this gateway it
-          // measured identical to `max` — so hiding the row would leave the user
-          // reading a default as if it were off.
-          current === null ? null : h('button', {
-            ref: levelRef,
-            type: 'button',
-            className: `llmm-trigger llmm-effort${effortState === 'adjustable' || effortState === 'measured' ? '' : ' llmm-effort-static'}`,
-            'aria-disabled': locked || (effortState !== 'adjustable' && effortState !== 'measured'),
-            'aria-haspopup': effortState === 'adjustable' || effortState === 'measured' ? 'menu' : undefined,
-            title: effortTitle,
-            onClick: () => {
-              // A measured-but-undeclared model opens the menu too: the levels exist,
-              // the declaration does not, and the menu is where that is explained and
-              // fixed. Only a model the probe never touched stays a plain label.
-              if (locked || (effortState !== 'adjustable' && effortState !== 'measured')) return
-              setOpen(false)
-              setLevelOpen(value => !value)
-            },
-          },
-            h('span', { className: 'llmm-effort-sep', 'aria-hidden': true }, '·'),
-            h('span', { className: 'llmm-trigger-label' }, effortLabel),
-            effortState === 'adjustable' || effortState === 'measured'
-              ? h('span', { 'aria-hidden': true }, '▾')
-              : null,
           ),
         ),
         open && position !== null ? createPortal(card, document.body) : null,
-        levelOpen && levelPos !== null ? createPortal(levelMenu, document.body) : null,
         // The label an icon cannot spell. Portalled for the same reason the card is:
         // an ancestor with overflow would clip a fixed child out of position.
         tip !== null
@@ -2447,6 +3093,7 @@ window.__ModuleLoader__.load({
       const [autoSwitch, setAutoSwitch] = useState(true)
       const [hiddenAt, setHiddenAt] = useState(0)
       const [busy, setBusy] = useState('')
+      const [filled, setFilled] = useState(false)
 
       useEffect(() => {
         if (sessionId === '') return undefined
@@ -2464,6 +3111,9 @@ window.__ModuleLoader__.load({
         const timer = setInterval(tick, 5000)
         return () => { alive = false; clearInterval(timer) }
       }, [sessionId])
+
+      // A continuation belongs to one switch; a newer one starts it over.
+      useEffect(() => { setFilled(false) }, [note?.at])
 
       if (note === null || note === undefined) return null
       if (note.at <= hiddenAt) return null
@@ -2484,6 +3134,18 @@ window.__ModuleLoader__.load({
             : note.reason === 'no_adapter' ? 'NoAdapter'
               : note.reason === 'rate_limited' ? 'RateLimited' : 'Error'}`
       const reason = t(reasonKey)
+      // A switch cannot rescue the run that failed — the platform freezes the
+      // model for the step that already started — so the only continuation is the
+      // next message. That message should stay the user's: this fills an editable
+      // prompt instead of sending text they never wrote.
+      const continuable = outcome === 'reached'
+        && props?.inputActions !== undefined
+        && typeof props.inputActions.setDraft === 'function'
+      const continueTurn = () => {
+        props.inputActions.setDraft(t('continuePrompt'))
+        if (typeof props.inputActions.persistDraft === 'function') props.inputActions.persistDraft()
+        setFilled(true)
+      }
       const run = async (action, body) => {
         setBusy(action)
         try { await callHost({ action, sessionId, ...body }) } catch { /* advisory */ } finally { setBusy('') }
@@ -2500,6 +3162,9 @@ window.__ModuleLoader__.load({
             // The raw provider text is one clamped line with the whole message on
             // hover. It used to be inlined in full — up to 400 characters — which
             // is what made this banner taller than the conversation it sat in.
+            filled
+              ? h('div', { className: 'llmm-banner-cont' }, t('fallbackContinueFilled'))
+              : null,
             h('div', { className: 'llmm-banner-why', title: note.detail ?? '' },
               outcome === 'reached'
                 ? reason
@@ -2507,6 +3172,15 @@ window.__ModuleLoader__.load({
             ),
           ),
           h('div', { className: 'llmm-banner-acts' },
+            // Offered only where a switch really landed: elsewhere there is no new
+            // model to continue on, so the button would promise what it cannot do.
+            continuable
+              ? h('button', {
+                type: 'button',
+                className: 'llmm-btn llmm-btn-quiet',
+                onClick: continueTurn,
+              }, t('fallbackContinue'))
+              : null,
             // Undo, only once something was actually switched: it moves the
             // Session's model back, so it is offered when that is meaningful.
             outcome === 'reached' && note.from
@@ -2529,6 +3203,1726 @@ window.__ModuleLoader__.load({
           ),
         ),
       )
+    }
+
+    // ── The model manager ──
+
+    /**
+     * Open state for the manager dialog.
+     *
+     * It lives at module scope because two unrelated surfaces drive it: the
+     * picker's footer opens the dialog, and the dialog itself closes it. State
+     * owned by one slot entry would only be reachable from that entry.
+     *
+     * @returns {object} `{ subscribe, get, set }`.
+     */
+    const managerStore = (() => {
+      let open = false
+      // Which tab the next open lands on. The palette names tabs ("recent
+      // failovers", "probe log"), so opening the dialog at its first tab and
+      // leaving the user to click again would answer a different question.
+      let tab = 'catalog'
+      const listeners = new Set()
+      const emit = () => {
+        for (const listener of listeners) {
+          // One surface's failure must not cost the others their rerender.
+          try { listener() } catch { /* ignore */ }
+        }
+      }
+      return {
+        subscribe(listener) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        get: () => open,
+        tab: () => tab,
+        // The dialog reports the tab the user actually clicked, so "open on
+        // records" repeated after a manual switch still differs from where the
+        // dialog sits and therefore still moves it.
+        setTab(next) {
+          if (tab === next) return
+          tab = next
+          emit()
+        },
+        set(next, nextTab) {
+          // An entry point that names no tab means "manage models", so it lands on
+          // the catalogue even if the last visit sat on another tab. Reopening
+          // where someone happened to be earlier answers a question they did not ask.
+          const wanted = typeof nextTab === 'string' ? nextTab : 'catalog'
+          if (open === next && tab === wanted) return
+          open = next
+          tab = wanted
+          emit()
+        },
+      }
+    })()
+
+    /** Open the manager from anywhere inside this plugin, optionally at a tab. */
+    const openManager = (tab) => managerStore.set(true, tab)
+
+    /**
+     * Split the persisted `route/model` chain entry back into its halves.
+     *
+     * The Host stores the chain as one string per candidate, so a rename of a
+     * route display name never has to rewrite the policy.
+     *
+     * @param {string} entry - `"route/model"`.
+     * @returns {{route: string, model: string}} the two halves.
+     */
+    const splitRef = (entry) => {
+      const at = entry.indexOf('/')
+      return at <= 0 ? { route: entry, model: '' } : { route: entry.slice(0, at), model: entry.slice(at + 1) }
+    }
+
+    /**
+     * An action this client knows but this host does not is the signature of a
+     * stale process: the browser reloaded the plugin's client half while the
+     * host still runs the copy it booted with. Saying so beats an empty list.
+     *
+     * @param {unknown} failure - whatever `callHost` rejected with.
+     * @returns {boolean} whether the host is running an older copy.
+     */
+    function isStaleHost(failure) {
+      return /unknown action/i.test(String(failure?.message ?? failure ?? ''))
+    }
+
+    /**
+     * The dialog's mounting point: it renders nothing while closed, so its data
+     * is only fetched on the turn the user actually asks for it.
+     *
+     * @param {object} props - the slot props (unused; the dialog reads the Host).
+     * @returns {object|null} the dialog, or nothing while closed.
+     */
+    /**
+     * A hook seat that answers nothing, so the manager reads the Session list through
+     * one unconditional hook call whether or not the host provides it.
+     * @returns {undefined} no rows.
+     */
+    function useNoSessions() {
+      return undefined
+    }
+
+    function ManagerDialog(props) {
+      const open = useSyncExternalStore(managerStore.subscribe, managerStore.get, managerStore.get)
+      return open ? h(ManagerBody, props) : null
+    }
+
+    /**
+     * The manager itself: catalog, failover policy and probe log.
+     *
+     * Three tabs rather than three dialogs because they answer one question —
+     * "what will this profile do when I send a message" — and the draft has to
+     * span the policy and the proficiency overrides together: a chain saved
+     * without its levels would be a half-applied edit.
+     *
+     * Pins, stars and visibility are NOT drafted: they are already immediate
+     * everywhere else in this plugin, and hiding a model that then stays listed
+     * until "save" would read as a bug. Edits to them write through at once; only
+     * the policy and the manual levels wait for the save button.
+     *
+     * @returns {object} the dialog element.
+     */
+    function ManagerBody(props) {
+      const [snap, setSnap] = useState(null)
+      const [records, setRecords] = useState([])
+      const [failovers, setFailovers] = useState({ records: [], models: [] })
+      const requestedTab = useSyncExternalStore(managerStore.subscribe, managerStore.tab, managerStore.tab)
+      const [tab, setTab] = useState(() => managerStore.tab())
+      const [query, setQuery] = useState('')
+      const [filter, setFilter] = useState('all')
+      const [expandKeys, setExpandKeys] = useState(new Set())
+      const [enabled, setEnabled] = useState(true)
+      const [chain, setChain] = useState([])
+      const [baseline, setBaseline] = useState({ enabled: true, chain: [] })
+      const [manual, setManual] = useState({})
+      const [addKey, setAddKey] = useState('')
+      const [addOpen, setAddOpen] = useState(false)
+      const [addQuery, setAddQuery] = useState('')
+      const [checked, setChecked] = useState(null)
+      const [busy, setBusy] = useState('')
+      const [error, setError] = useState('')
+      const [stale, setStale] = useState(false)
+      const [note, setNote] = useState('')
+      const [askDiscard, setAskDiscard] = useState(false)
+      const [pendingSession, setPendingSession] = useState('')
+      const [tip, setTip] = useState(null)
+      const panelRef = useRef(null)
+      const tipChannel = useMemo(() => ({
+        show: (text, node) => {
+          const rect = node.getBoundingClientRect()
+          const half = Math.max(40, text.length * 5.5)
+          const x = Math.min(window.innerWidth - half - 8, Math.max(half + 8, rect.left + rect.width / 2))
+          setTip({ text, x, y: rect.top - 6 })
+        },
+        hide: () => setTip(null),
+      }), [])
+
+      const reload = useCallback(async () => {
+        try {
+          const data = await callHost({ action: 'snapshot' })
+          if (data !== undefined && data.value !== undefined) setSnap(data.value)
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(t('managerLoadFailed'))
+        }
+      }, [])
+
+      /**
+       * Re-read the gateway directory instead of the cached one.
+       *
+       * The directory has a 30-minute cache because reading it costs a round trip
+       * per route, but a gateway that retires models without notice makes that
+       * cache a lie about which rows still exist. Forcing the read is the whole
+       * point of the button: the cached answer is exactly the one the user
+       * already has on screen.
+       */
+      const pull = async () => {
+        setBusy('pull')
+        setNote('')
+        setError('')
+        try {
+          const before = snap
+          const data = await callHost({ action: 'snapshot', forceDirectory: true })
+          if (data === undefined || data.value === undefined) return
+          const next = data.value
+          setSnap(next)
+          const directories = Array.isArray(next.directory) ? next.directory : []
+          // A route that exposes no baseURL has no directory to read, and saying so is
+          // not the same as the pull failing: the built-in routes are in that state on
+          // every pull, so treating them as errors would make the button always red.
+          // Only "not one route could be read" is a failed pull.
+          const readable = directories.filter((entry) => entry.ok === true)
+          if (readable.length === 0) {
+            setError(t('pullFailed').replace('{message}',
+              directories[0] === undefined || directories[0].error === '' ? '' : directories[0].error))
+            return
+          }
+          // Naming the routes keeps the number honest: the catalogue header counts every
+          // model on every route, so a bare "75" next to "115/115" reads like a partial
+          // failure instead of "75 is what a directory can be read for".
+          const detail = readable.map((entry) => `${entry.route} ${entry.count}`).join(' \u00b7 ')
+
+          // What the user asked the button for: which models the gateway stopped
+          // listing. Named, not counted — "3 retired" leaves them looking it up by
+          // hand, which is the work this row exists to remove.
+          const wasListed = new Set((before?.models ?? [])
+            .filter((entry) => entry.status !== 'retired')
+            .map((entry) => entry.model))
+          const gone = (next.models ?? [])
+            .filter((entry) => entry.status === 'retired' && wasListed.has(entry.model))
+            .map((entry) => entry.model)
+          const named = gone.slice(0, 3).join(', ') + (gone.length > 3 ? ` +${gone.length - 3}` : '')
+          setNote(t('pullDone').replace('{detail}', detail)
+            + (gone.length === 0 ? '' : t('pullMissing').replace('{names}', named)))
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(t('pullFailed').replace('{message}', failure instanceof Error ? failure.message : String(failure)))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      useEffect(() => {
+        ensureStylesheet()
+        reload()
+      }, [reload])
+
+      // A palette row can ask for a tab while the dialog is already open, so the
+      // store's choice has to win over the local state after mount as well.
+      useEffect(() => { setTab(requestedTab) }, [requestedTab])
+
+      // The policy is fetched once: it is the only tab whose values are drafted,
+      // so it has to be complete before the first keystroke can be judged dirty.
+      useEffect(() => {
+        let alive = true
+        callHost({ action: 'fallbackConfig' })
+          .then((data) => {
+            if (!alive || data === undefined || data.value === undefined) return
+            const next = {
+              enabled: data.value.enabled !== false,
+              chain: Array.isArray(data.value.chain) ? data.value.chain.slice() : [],
+            }
+            setEnabled(next.enabled)
+            setChain(next.chain)
+            setBaseline(next)
+          })
+          .catch((failure) => { if (isStaleHost(failure)) setStale(true) })
+        return () => { alive = false }
+      }, [])
+
+      useEffect(() => {
+        if (tab !== 'switches') return undefined
+        let alive = true
+        callHost({ action: 'failoverHistory' })
+          .then((data) => {
+            if (!alive || data === undefined || data.value === undefined) return
+            setFailovers({
+              records: Array.isArray(data.value.records) ? data.value.records : [],
+              models: Array.isArray(data.value.models) ? data.value.models : [],
+            })
+          })
+          .catch((failure) => { if (isStaleHost(failure)) setStale(true) })
+        return () => { alive = false }
+      }, [tab])
+
+      useEffect(() => {
+        if (tab !== 'records') return undefined
+        let alive = true
+        callHost({ action: 'probeRecords' })
+          .then((data) => {
+            if (!alive) return
+            setRecords(Array.isArray(data?.value?.records) ? data.value.records : [])
+          })
+          .catch((failure) => { if (isStaleHost(failure)) setStale(true) })
+        return () => { alive = false }
+      }, [tab])
+
+      useEffect(() => {
+        if (panelRef.current !== null) panelRef.current.focus()
+      }, [])
+
+      const dirty = Object.keys(manual).length > 0
+        || enabled !== baseline.enabled
+        || JSON.stringify(chain) !== JSON.stringify(baseline.chain)
+
+      /**
+       * Closing with unsaved edits asks once. Losing a reordered chain to a
+       * stray click on the backdrop is the kind of thing a dialog must not do.
+       */
+      const attemptClose = () => {
+        if (dirty) { setAskDiscard(true); return }
+        managerStore.set(false)
+      }
+
+      /**
+       * Leaving for a Session also closes the dialog, so it takes the same guard as
+       * the close button: a reordered chain that was never saved must not be dropped
+       * because the click landed on a session name rather than on the backdrop.
+       */
+      const leaveForSession = (sessionId) => {
+        setPendingSession('')
+        managerStore.set(false)
+        if (typeof props.openSession === 'function') props.openSession(sessionId)
+      }
+
+      const openSessionRow = (sessionId) => {
+        if (typeof sessionId !== 'string' || sessionId === '') return
+        if (dirty) { setPendingSession(sessionId); setAskDiscard(true); return }
+        leaveForSession(sessionId)
+      }
+
+      const discardAndClose = () => {
+        const target = pendingSession
+        setAskDiscard(false)
+        setManual({})
+        setEnabled(baseline.enabled)
+        setChain(baseline.chain)
+        if (target !== '') { leaveForSession(target); return }
+        managerStore.set(false)
+      }
+
+      const save = async () => {
+        setBusy('save')
+        setError('')
+        setNote('')
+        try {
+          // Levels first: a chain entry the user just gave a proficiency is still
+          // valid if the policy write fails, and both writes report their own error.
+          for (const model of Object.keys(manual)) {
+            await callHost({ action: 'setLevel', model, level: manual[model] })
+          }
+          await callHost({ action: 'setFallback', enabled, chain })
+          setManual({})
+          setBaseline({ enabled, chain })
+          setNote(t('managerSaved'))
+          await reload()
+        } catch (failure) {
+          // Never claim a write that did not land: the draft stays, and the reason
+          // is shown next to the button that failed.
+          setError(failure?.message ?? t('managerSaveFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      // ── the model-first rows, the same shape the picker uses ──
+      const rows = useMemo(() => {
+        if (snap === null || !Array.isArray(snap.models)) return []
+        return snap.models.map((entry) => {
+          const routes = Array.isArray(entry.routes) ? entry.routes : []
+          const primary = routes.find((route) => route.route === entry.primary) ?? routes[0] ?? null
+          return primary === null ? null : { model: entry.model, primary, routes }
+        }).filter(Boolean)
+      }, [snap])
+
+      const shown = rows.filter((row) => {
+        const needle = query.trim().toLowerCase()
+        if (needle !== '' && `${row.model} ${row.primary.route} ${row.primary.name ?? ''}`.toLowerCase().indexOf(needle) < 0) return false
+        if (filter === 'problem') return isProblem(row.primary.status) || row.primary.status === 'unknown'
+        if (filter === 'pinned') return row.routes.some((route) => route.pinned === true)
+        if (filter === 'starred') return row.routes.some((route) => route.favorite === true)
+        if (filter === 'hidden') return row.routes.every((route) => route.hidden === true)
+        return true
+      })
+
+      const toggleList = async (row, list) => {
+        const active = list === 'pins' ? row.primary.pinned === true
+          : list === 'favorites' ? row.primary.favorite === true
+            : row.primary.hidden === true
+        setBusy(`${list}:${row.model}`)
+        setError('')
+        try {
+          await callHost({ action: 'toggle', route: row.primary.route, model: row.model, list, on: !active })
+          await reload()
+        } catch {
+          setError(t('managerWriteFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const probeOne = async (row) => {
+        setBusy(`probe:${row.model}`)
+        setError('')
+        try {
+          await callHost({ action: 'probe', route: row.primary.route, model: row.model })
+          await reload()
+        } catch {
+          setError(t('managerProbeFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const probeAll = async () => {
+        setBusy('probe-all')
+        setError('')
+        try {
+          // The Host caps the batch and paces it; the dialog sends what is on
+          // screen so "probe all" means the list the user is looking at.
+          const targets = shown.map((row) => ({ route: row.primary.route, model: row.model }))
+          await callHost({ action: 'probeBatch', targets })
+          await reload()
+          if (tab === 'records') {
+            const data = await callHost({ action: 'probeRecords' })
+            setRecords(Array.isArray(data?.value?.records) ? data.value.records : [])
+          }
+        } catch {
+          setError(t('managerProbeFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      // Removal writes through at once, like pins and visibility: it is a statement
+      // about which rows the user wants to see, not a drafted policy. It is also the
+      // one action here that can be undone from the same panel, which is why it does
+      // not need a confirmation dialog of its own.
+      const removeModel = async (row) => {
+        setBusy(`remove:${row.model}`)
+        setError('')
+        setNote('')
+        try {
+          const data = await callHost({ action: 'removeModel', route: row.primary.route, model: row.model })
+          if (data !== undefined && data.value !== undefined) setSnap(data.value)
+          setNote(t('removeModelDone'))
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(t('managerWriteFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const restoreModel = async (entry) => {
+        setBusy(`restore:${entry.model}`)
+        setError('')
+        setNote('')
+        try {
+          const data = await callHost({ action: 'restoreModel', route: entry.route, model: entry.model })
+          if (data !== undefined && data.value !== undefined) setSnap(data.value)
+          setNote(t('restoreModelDone'))
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(t('managerWriteFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const clearSwitches = async () => {
+        setBusy('clear-switches')
+        setError('')
+        try {
+          await callHost({ action: 'clearFailover' })
+          setFailovers({ records: [], models: [] })
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(t('managerWriteFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      const moveInChain = (index, delta) => {
+        const next = chain.slice()
+        const to = index + delta
+        if (to < 0 || to >= next.length) return
+        const moved = next.splice(index, 1)[0]
+        next.splice(to, 0, moved)
+        setChain(next)
+      }
+
+      const removeFromChain = (index) => setChain(chain.filter((unused, at) => at !== index))
+
+      const addToChain = () => {
+        if (addKey === '' || chain.includes(addKey) || chain.length >= 12) return
+        setChain([...chain, addKey])
+        setAddKey('')
+      }
+
+      // Local only: the chain is about "would this even resolve", so it answers
+      // from the directory and the health this plugin already recorded instead of
+      // spending a request per candidate.
+      const checkChain = () => {
+        const results = chain.map((entry) => {
+          const ref = splitRef(entry)
+          const row = rows.find((candidate) => candidate.model === ref.model)
+          const route = row === undefined ? undefined : row.routes.find((candidate) => candidate.route === ref.route)
+          if (route === undefined) return { entry, ok: false, why: t('chainMissing') }
+          if (route.hidden === true) return { entry, ok: false, why: t('chainHidden') }
+          if (isProblem(route.status)) return { entry, ok: false, why: statusLabel(route.status) }
+          if (route.status === 'unknown') return { entry, ok: false, why: t('chainUnprobed') }
+          return { entry, ok: true, why: statusLabel(route.status) }
+        })
+        setChecked(results)
+      }
+
+      const levelOf = (row) => (manual[row.model] !== undefined
+        ? manual[row.model]
+        : (row.primary.usage === undefined || row.primary.usage === null ? 1 : row.primary.usage.level))
+
+      const levelEditor = (row) => h('div', { className: 'llmm-mg-levels' },
+        h('span', { className: 'llmm-mg-levels-label' }, t('levelManual')),
+        h('button', {
+          type: 'button',
+          className: `llmm-mg-lvbtn${manual[row.model] === null ? ' llmm-mg-lvbtn-on' : ''}`,
+          'aria-pressed': manual[row.model] === null,
+          onClick: () => setManual({ ...manual, [row.model]: null }),
+        }, t('levelAuto')),
+        Array.from({ length: 7 }, (unused, index) => index + 1).map((level) => h('button', {
+          key: level,
+          type: 'button',
+          className: `llmm-mg-lvbtn${manual[row.model] === level ? ' llmm-mg-lvbtn-on' : ''}`,
+          'aria-pressed': manual[row.model] === level,
+          onClick: () => setManual({ ...manual, [row.model]: level }),
+        }, String(level))),
+      )
+
+      const catalogRow = (row) => {
+        const route = row.primary
+        const open = expandKeys.has(row.model)
+        const level = levelOf(row)
+        return h('div', { className: 'llmm-mg-item', key: row.model },
+          h('div', { className: 'llmm-mg-row' },
+            h('button', {
+              type: 'button',
+              className: 'llmm-mg-main',
+              'aria-expanded': open,
+              onClick: () => setExpandKeys((keys) => {
+                const next = new Set(keys)
+                if (next.has(row.model)) next.delete(row.model)
+                else next.add(row.model)
+                return next
+              }),
+            },
+              h('span', { className: `llmm-dot ${statusTone(route.status)}` }),
+              h('span', { className: 'llmm-mg-name' }, row.model),
+              level > 0 && level !== null
+                ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(level, 7)}` }, `${t('levelShort')}.${level}`)
+                : null,
+              h('span', { className: 'llmm-mg-sub' }, `${route.name ?? route.route} \u00b7 ${statusLabel(route.status)}`),
+            ),
+            h('div', { className: 'llmm-mg-acts' },
+              h(IconButton, {
+                icon: 'pin',
+                label: route.pinned === true ? t('unpin') : t('pin'),
+                active: route.pinned === true,
+                filled: route.pinned === true,
+                tip: tipChannel,
+                pending: busy === `pins:${row.model}`,
+                on: () => toggleList(row, 'pins'),
+              }),
+              h(IconButton, {
+                icon: 'star',
+                label: route.favorite === true ? t('unfavorite') : t('favorite'),
+                active: route.favorite === true,
+                filled: route.favorite === true,
+                tip: tipChannel,
+                pending: busy === `favorites:${row.model}`,
+                on: () => toggleList(row, 'favorites'),
+              }),
+              h(IconButton, {
+                icon: route.hidden === true ? 'eyeOff' : 'eye',
+                label: route.hidden === true ? t('unhide') : t('hide'),
+                active: route.hidden === true,
+                tip: tipChannel,
+                pending: busy === `hidden:${row.model}`,
+                on: () => toggleList(row, 'hidden'),
+              }),
+              h(IconButton, {
+                icon: 'pulse',
+                label: t('probe'),
+                danger: isProblem(route.status),
+                tip: tipChannel,
+                pending: busy === `probe:${row.model}`,
+                on: () => probeOne(row),
+              }),
+            ),
+          ),
+          open
+            ? h('div', { className: 'llmm-mg-detail' },
+              h(ModelDetail, {
+                row: { ...route, model: row.model },
+                extra: h('div', { className: 'llmm-mg-extra' },
+                  levelEditor(row),
+                  h('button', {
+                    type: 'button',
+                    className: 'llmm-dlg-btn llmm-mg-remove',
+                    disabled: busy !== '',
+                    onClick: () => removeModel(row),
+                  }, busy === `remove:${row.model}` ? t('managerSaving') : t('removeModel'))),
+              }),
+              row.routes.length > 1
+                ? h('div', { className: 'llmm-mg-also' }, `${t('alsoOn')} ${row.routes.map((candidate) => candidate.route).join(' \u00b7 ')}`)
+                : null,
+            )
+            : null,
+        )
+      }
+
+      // A flat list of `route/model` strings told the user nothing about which
+      // candidate can actually serve a turn, and once a provider ships twenty
+      // models the list was long enough that picking one was a scroll hunt.
+      // Order by whether the route answered, then by measured level, then name.
+      const statusRank = { ok: 0, unknown: 1, protocol: 2, error: 3, retired: 4 }
+      const candidates = rows
+        .map((row) => ({
+          key: `${row.primary.route}/${row.model}`,
+          model: row.model,
+          route: row.primary.route,
+          routeName: row.primary.name ?? row.primary.route,
+          status: row.primary.status,
+          level: levelOf(row),
+        }))
+        .filter((entry) => !chain.includes(entry.key))
+        .sort((left, right) => (statusRank[left.status] ?? 1) - (statusRank[right.status] ?? 1)
+          || (right.level ?? 0) - (left.level ?? 0)
+          || left.model.localeCompare(right.model))
+      const needle = addQuery.trim().toLowerCase()
+      const pickable = needle === ''
+        ? candidates
+        : candidates.filter((entry) => entry.key.toLowerCase().includes(needle))
+
+      const removedEntries = Array.isArray(snap?.removed) ? snap.removed : []
+
+      const directoryReads = (Array.isArray(snap?.directory) ? snap.directory : [])
+        .filter((entry) => entry.ok === true)
+      const catalogView = h(React.Fragment, null,
+        h('div', { className: 'llmm-mg-toolbar' },
+          h('input', {
+            type: 'search',
+            className: 'llmm-mg-search',
+            placeholder: t('managerSearch'),
+            value: query,
+            'aria-label': t('managerSearch'),
+            onChange: (event) => setQuery(event.target.value),
+          }),
+          h('select', {
+            className: 'llmm-mg-filter',
+            value: filter,
+            'aria-label': t('managerFilter'),
+            onChange: (event) => setFilter(event.target.value),
+          }, [
+            ['all', t('filterAll')],
+            ['problem', t('filterProblem')],
+            ['pinned', t('filterPinned')],
+            ['starred', t('filterStarred')],
+            ['hidden', t('filterHidden')],
+          ].map(([value, label]) => h('option', { key: value, value }, label))),
+          h('button', {
+            type: 'button',
+            className: 'llmm-dlg-btn',
+            disabled: busy !== '' || shown.length === 0,
+            onClick: probeAll,
+          }, t('probeAll')),
+        ),
+        directoryReads.length === 0
+          ? null
+          : h('div', { className: 'llmm-mg-dirs' },
+            // Only what was actually read. A route with no directory endpoint is not a
+            // failure and has no action behind it — printing it once per route turned
+            // the one fact worth reading ("this route, this many models, this fresh")
+            // into fourteen lines of unreadable apology — lines that could not change
+            // and had no action behind them. Provenance is worth one line; it is not
+            // worth one line per route that cannot have any.
+            directoryReads.map((entry) => h('span', {
+              key: entry.route,
+              className: 'llmm-mg-dir',
+            }, t('pullStamp')
+              .replace('{route}', entry.route)
+              .replace('{count}', String(entry.count))
+              .replace('{age}', ageOf(entry.at))))),
+        shown.length === 0
+          ? h('div', { className: 'llmm-mg-empty' }, t('managerEmpty'))
+          : shown.map((row) => catalogRow(row)),
+        removedEntries.length === 0
+          ? null
+          : h('div', { className: 'llmm-mg-removed' },
+            h('div', { className: 'llmm-mg-removed-head' }, `${t('removedTitle')} \u00b7 ${removedEntries.length}`),
+            removedEntries.map((entry) => h('div', { className: 'llmm-mg-row llmm-mg-removed-row', key: `${entry.route}/${entry.model}` },
+              h('span', { className: 'llmm-mg-name' }, entry.model),
+              h('span', { className: 'llmm-mg-sub' }, `${entry.route} \u00b7 ${entry.listed === true ? t('removedListed') : t('removedGone')}`),
+              h('button', {
+                type: 'button',
+                className: 'llmm-dlg-btn llmm-mg-restore',
+                disabled: busy !== '',
+                onClick: () => restoreModel(entry),
+              }, t('removedRestore'))))),
+      )
+
+      const failoverView = h(React.Fragment, null,
+        h('label', { className: 'llmm-fb-toggle' },
+          h('input', {
+            type: 'checkbox',
+            checked: enabled,
+            onChange: (event) => setEnabled(event.target.checked),
+          }),
+          h('span', null, t('fallbackToggle'))),
+        chain.length === 0
+          ? h('div', { className: 'llmm-mg-empty' }, t('fallbackEmpty'))
+          : h('div', { className: 'llmm-fb-list' }, chain.map((entry, index) => h('div', { className: 'llmm-fb-item', key: entry },
+            h('span', { className: 'llmm-fb-index' }, String(index + 1)),
+            h('span', { className: 'llmm-fb-name' }, splitRef(entry).model),
+            h('code', { className: 'llmm-fb-route' }, splitRef(entry).route),
+            h('div', { className: 'llmm-mg-acts' },
+              h('button', {
+                type: 'button',
+                className: 'llmm-ibtn',
+                'aria-label': t('fallbackUp'),
+                disabled: index === 0,
+                onClick: () => moveInChain(index, -1),
+              }, '\u2191'),
+              h('button', {
+                type: 'button',
+                className: 'llmm-ibtn',
+                'aria-label': t('fallbackDown'),
+                disabled: index === chain.length - 1,
+                onClick: () => moveInChain(index, 1),
+              }, '\u2193'),
+              h('button', {
+                type: 'button',
+                className: 'llmm-ibtn llmm-danger',
+                'aria-label': t('fallbackRemove'),
+                onClick: () => removeFromChain(index),
+              }, '\u2715'),
+            ),
+          ))),
+        h('div', { className: 'llmm-fb-add' },
+          h('div', { className: 'llmm-fb-picker' },
+            h('button', {
+              type: 'button',
+              className: 'llmm-dlg-btn llmm-fb-pick',
+              'aria-haspopup': 'listbox',
+              'aria-expanded': addOpen === true,
+              'aria-label': t('fallbackPick'),
+              onClick: () => { setAddOpen(addOpen !== true); setAddQuery('') },
+            },
+              h('span', { className: 'llmm-fb-pick-label' }, addKey === '' ? t('fallbackPick') : addKey),
+              h('span', { className: 'llmm-fb-pick-caret', 'aria-hidden': 'true' }, '\u25be')),
+            addOpen === true
+              ? h('div', { className: 'llmm-fb-pop', role: 'listbox', 'aria-label': t('fallbackPick') },
+                h('input', {
+                  type: 'search',
+                  className: 'llmm-mg-search llmm-fb-pop-search',
+                  placeholder: t('managerSearch'),
+                  value: addQuery,
+                  'aria-label': t('managerSearch'),
+                  onChange: (event) => setAddQuery(event.target.value),
+                }),
+                h('div', { className: 'llmm-fb-pop-list' },
+                  pickable.length === 0
+                    ? h('div', { className: 'llmm-mg-empty' }, t('managerEmpty'))
+                    : pickable.map((entry) => h('button', {
+                      key: entry.key,
+                      type: 'button',
+                      role: 'option',
+                      'aria-selected': entry.key === addKey,
+                      className: 'llmm-fb-opt' + (entry.key === addKey ? ' llmm-fb-opt-on' : '') + (entry.status === 'ok' ? '' : ' llmm-fb-opt-bad'),
+                      onClick: () => { setAddKey(entry.key); setAddOpen(false) },
+                    },
+                      h('span', { className: `llmm-dot ${statusTone(entry.status)}`, 'aria-hidden': 'true' }),
+                      h('span', { className: 'llmm-fb-opt-name' }, entry.model),
+                      entry.level > 1
+                        ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(entry.level, 7)}` }, `Lv.${entry.level}`)
+                        : null,
+                      h('span', { className: 'llmm-fb-opt-route' }, entry.routeName),
+                      h('span', { className: 'llmm-fb-opt-flag' }, statusLabel(entry.status)),
+                    )),
+                ),
+              )
+              : null,
+          ),
+          h('button', {
+            type: 'button',
+            className: 'llmm-dlg-btn llmm-dlg-btn-primary llmm-fb-commit',
+            disabled: addKey === '' || chain.length >= 12,
+            onClick: addToChain,
+          }, t('fallbackAdd')),
+        ),
+        h('ul', { className: 'llmm-fb-notes' },
+          [t('fallbackNote1'), t('fallbackNote2'), t('fallbackNote3'), t('fallbackNote4')]
+            .map((line, index) => h('li', { key: index }, line))),
+        h('div', { className: 'llmm-fb-check' },
+          h('button', { type: 'button', className: 'llmm-dlg-btn', onClick: checkChain }, t('checkChain')),
+          checked === null
+            ? null
+            : h('ul', { className: 'llmm-fb-results' }, checked.map((result) => h('li', {
+              key: result.entry,
+              className: result.ok ? 'llmm-fb-ok' : 'llmm-fb-bad',
+            }, `${result.entry} \u2014 ${result.why}`))),
+        ),
+      )
+
+      // The history answers one question the other tabs cannot: which model keeps
+      // failing. It is sorted by that count, and the aggregate sits above the raw
+      // events so the answer is readable without scrolling a log.
+      const outcomeLabel = (outcome) => {
+        if (outcome === 'reached') return t('outcomeReached')
+        if (outcome === 'ran-elsewhere') return t('outcomeElsewhere')
+        return t('outcomeUnreached')
+      }
+      // Titles come from the Session list projection, not from our own log: the log
+      // records the id it saw, and a Session that was renamed since must not keep
+      // answering to its old name in the history.
+      const useSessionRows = typeof props.useSessions === 'function' ? props.useSessions : useNoSessions
+      const sessionRows = useSessionRows((state) => (state === undefined ? undefined : state.byId))
+      const canOpenSession = typeof props.canOpenSession === 'function' && props.canOpenSession() === true
+      const sessionLabel = (sessionId) => {
+        const row = sessionRows === undefined ? undefined : sessionRows[sessionId]
+        const label = typeof row?.displayTitle === 'string' && row.displayTitle !== '' ? row.displayTitle : row?.title
+        if (typeof label === 'string' && label !== '') return label
+        return String(sessionId ?? '').slice(0, 8)
+      }
+
+      const switchesView = h(React.Fragment, null,
+        h('div', { className: 'llmm-sw-head' },
+          h('span', { className: 'llmm-sw-title' }, t('switchesModels')),
+          h('span', { className: 'llmm-dlg-gap' }),
+          h('button', {
+            type: 'button',
+            className: 'llmm-dlg-btn llmm-sw-clear',
+            disabled: busy !== '' || failovers.records.length === 0,
+            onClick: clearSwitches,
+          }, t('switchesClear'))),
+        failovers.records.length === 0
+          ? h('div', { className: 'llmm-mg-empty' }, t('switchesEmpty'))
+          : h(React.Fragment, null,
+            h('div', { className: 'llmm-sw-models' }, failovers.models.map((stat) => h('div', {
+              className: 'llmm-sw-row',
+              key: `${stat.route}/${stat.model}`,
+            },
+              h('span', { className: 'llmm-sw-count' }, String(stat.switches)),
+              h('span', { className: 'llmm-mg-name' }, stat.model),
+              h('span', { className: 'llmm-sw-sub' }, `${t('switchesReached')} ${stat.reached}`),
+              h('span', { className: 'llmm-sw-sub' }, `${t('switchesUnreached')} ${stat.unreached}`),
+              stat.sessions > 0
+                ? h('span', { className: 'llmm-sw-sub' }, `${stat.sessions} ${t('switchesSessions')}`)
+                : null,
+              Object.keys(stat.reasons ?? {}).length === 0
+                ? null
+                : h('span', { className: 'llmm-mg-sub' }, Object.keys(stat.reasons).map((reason) => `${statusLabel(reason)}×${stat.reasons[reason]}`).join(' · ')),
+              h('span', { className: 'llmm-mg-when' }, stat.lastAt > 0 ? ageOf(stat.lastAt) : ''),
+            ))),
+            h('div', { className: 'llmm-sw-title' }, t('switchesRecent')),
+            h('div', { className: 'llmm-sw-log' }, failovers.records.slice(0, 12).map((record, index) => h('div', {
+              className: 'llmm-sw-row llmm-sw-event',
+              key: `${record.at}-${index}`,
+            },
+              h('span', { className: `llmm-dot ${record.outcome === 'reached' ? 'ok' : 'bad'}` }),
+              h('span', { className: 'llmm-mg-name' }, record.from?.model ?? ''),
+              h('span', { className: 'llmm-sw-arrow' }, '\u2192'),
+              h('span', { className: 'llmm-mg-name' }, record.to?.model ?? ''),
+              h('span', { className: 'llmm-mg-sub' }, `${statusLabel(record.reason)} \u00b7 ${outcomeLabel(record.outcome)}`),
+              // The Session is where the failure happened, so the history row is the
+              // only place a reader can go and look at it. The id stays in the title,
+              // because two Sessions may share a title and the id is what is unique.
+              typeof record.sessionId !== 'string' || record.sessionId === ''
+                ? null
+                : canOpenSession
+                  ? h('button', {
+                    type: 'button',
+                    className: 'llmm-sw-session',
+                    title: `${t('switchOpenSession')} \u00b7 ${record.sessionId}`,
+                    onClick: () => openSessionRow(record.sessionId),
+                  }, sessionLabel(record.sessionId))
+                  : h('span', {
+                    className: 'llmm-sw-session llmm-sw-session-flat',
+                    title: record.sessionId,
+                  }, sessionLabel(record.sessionId)),
+              h('span', { className: 'llmm-mg-when' }, record.at > 0 ? ageOf(record.at) : ''),
+            )))),
+        h('div', { className: 'llmm-sw-note' }, t('switchesNote')),
+      )
+
+      const recordsView = records.length === 0
+        ? h('div', { className: 'llmm-mg-empty' }, t('recordsEmpty'))
+        : h('div', { className: 'llmm-mg-records' }, records.map((record, index) => h('div', {
+          className: 'llmm-mg-row llmm-mg-record',
+          key: `${record.model}-${record.at}-${index}`,
+        },
+          h('span', { className: `llmm-dot ${statusTone(record.status)}` }),
+          h('span', { className: 'llmm-mg-name' }, record.model),
+          h('span', { className: 'llmm-mg-sub' }, `${record.route} \u00b7 ${record.detail !== undefined && record.detail !== '' ? record.detail : statusLabel(record.status)}`),
+          h('span', { className: 'llmm-mg-when' }, record.at > 0 ? ageOf(record.at) : ''),
+        )))
+
+      return h(React.Fragment, null,
+        h('div', {
+          className: 'llmm-dlg-mask',
+          onMouseDown: (event) => { if (event.target === event.currentTarget) attemptClose() },
+        },
+          h('div', {
+            className: 'llmm-dlg',
+            role: 'dialog',
+            'aria-modal': 'true',
+            'aria-label': t('managerTitle'),
+            tabIndex: -1,
+            ref: panelRef,
+            onKeyDown: (event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation()
+                attemptClose()
+              }
+            },
+          },
+            h('div', { className: 'llmm-dlg-head' },
+              h('span', { className: 'llmm-dlg-title' }, t('managerTitle')),
+              h('span', { className: 'llmm-dlg-count' }, `${shown.length}/${rows.length}`),
+              h('span', { className: 'llmm-dlg-gap' }),
+              h(IconButton, {
+                icon: 'refresh',
+                label: t('pullDir'),
+                className: 'llmm-dlg-pull',
+                pending: busy === 'pull',
+                disabled: busy !== '',
+                tip: tipChannel,
+                on: pull,
+              }),
+              h('button', {
+                type: 'button',
+                className: 'llmm-ibtn llmm-dlg-close',
+                'aria-label': t('panelClose'),
+                title: t('panelClose'),
+                onClick: attemptClose,
+              }, '\u2715'),
+            ),
+            h('div', { className: 'llmm-dlg-tabs', role: 'tablist' },
+              [['catalog', t('tabCatalog')], ['failover', t('tabFailover')], ['switches', t('tabSwitches')], ['records', t('tabRecords')]]
+                .map(([key, label]) => h('button', {
+                  key,
+                  type: 'button',
+                  role: 'tab',
+                  'aria-selected': tab === key,
+                  className: `llmm-tab${tab === key ? ' llmm-tab-on' : ''}`,
+                  onClick: () => { setTab(key); managerStore.setTab(key); setNote(''); setError('') },
+                }, label))),
+            stale ? h('div', { className: 'llmm-dlg-stale', role: 'status' }, t('hostStale')) : null,
+            h('div', { className: 'llmm-dlg-body' },
+              tab === 'catalog' ? catalogView : null,
+              tab === 'failover' ? failoverView : null,
+              tab === 'switches' ? switchesView : null,
+              tab === 'records' ? recordsView : null),
+            h('div', { className: 'llmm-dlg-foot' },
+              note !== '' ? h('span', { className: 'llmm-dlg-note' }, note) : null,
+              error !== '' ? h('span', { className: 'llmm-dlg-err', role: 'alert' }, error) : null,
+              dirty ? h('span', { className: 'llmm-dlg-dirty' }, t('managerDirty')) : null,
+              h('button', { type: 'button', className: 'llmm-dlg-btn', onClick: attemptClose }, t('managerCancel')),
+              h('button', {
+                type: 'button',
+                className: 'llmm-dlg-btn llmm-dlg-btn-primary',
+                disabled: dirty !== true || busy !== '',
+                onClick: save,
+              }, busy === 'save' ? t('managerSaving') : t('managerSave'))),
+          ),
+        ),
+        tip !== null
+          ? createPortal(h('div', {
+            className: 'llmm-tip',
+            style: { left: `${tip.x}px`, top: `${tip.y}px` },
+            role: 'tooltip',
+          }, tip.text), document.body)
+          : null,
+        askDiscard
+          ? h('div', { className: 'llmm-dlg-mask llmm-dlg-ask' },
+            h('div', {
+              className: 'llmm-dlg llmm-dlg-small',
+              role: 'alertdialog',
+              'aria-modal': 'true',
+              'aria-label': t('managerDiscardTitle'),
+            },
+              h('div', { className: 'llmm-dlg-head' },
+                h('span', { className: 'llmm-dlg-title' }, t('managerDiscardTitle'))),
+              h('div', { className: 'llmm-dlg-body' },
+                h('p', { className: 'llmm-dlg-copy' }, t('managerDiscardBody'))),
+              h('div', { className: 'llmm-dlg-foot' },
+                h('button', { type: 'button', className: 'llmm-dlg-btn', onClick: () => setAskDiscard(false) }, t('managerKeep')),
+                h('button', { type: 'button', className: 'llmm-dlg-btn llmm-dlg-btn-danger', onClick: discardAndClose }, t('managerDiscard')),
+              ),
+            ),
+          )
+          : null,
+      )
+    }
+
+    // ── The shipped picker's inline label ──
+
+    /**
+     * Mount the plugin stylesheet once into <head>.
+     *
+     * Every other surface of this plugin renders `<Style/>` inside its own subtree, and
+     * that is not enough here: the label lives inside the SHIPPED picker, whose subtree
+     * this plugin does not own, and in `native` mode no other surface of ours may be
+     * mounted at all. One `<style>` per row would multiply a 20 KB sheet by the size of
+     * the catalogue, so it is mounted once and re-found by its attribute.
+     */
+    function ensureStylesheet() {
+      if (typeof document === 'undefined') return
+      if (document.querySelector('style[data-llmm-style]') !== null) return
+      const tag = document.createElement('style')
+      tag.setAttribute('data-llmm-style', '')
+      tag.textContent = CSS
+      document.head.appendChild(tag)
+    }
+
+    /** Resolve a catalog badge's text: one literal, or translations keyed by language. */
+    function badgeText(text) {
+      if (typeof text === 'string') return text
+      if (text === null || typeof text !== 'object') return ''
+      const full = LANG.toLowerCase()
+      const short = full.split('-')[0]
+      const value = text[full] ?? text[short] ?? text.en
+      return typeof value === 'string' ? value : ''
+    }
+
+    const BADGE_TTL_MS = 60 * 1000
+    const NO_BADGES = new Map()
+
+    /**
+     * Per-model health and proficiency, shared by every label on screen.
+     *
+     * Module scope rather than component state: the label mounts once per picker row,
+     * so per-component fetching would be a stampede. The Host answers from its overlay
+     * (`badges`), which is why this can refresh on a minute at all.
+     */
+    const badgeStore = (() => {
+      let rows = NO_BADGES
+      let at = 0
+      let inflight = null
+      const listeners = new Set()
+      const emit = () => { for (const listener of listeners) listener() }
+      const load = () => {
+        if (inflight !== null) return inflight
+        if (at !== 0 && Date.now() - at < BADGE_TTL_MS) return Promise.resolve(rows)
+        inflight = callHost({ action: 'badges' })
+          .then((data) => {
+            const list = Array.isArray(data?.value) ? data.value : []
+            rows = new Map(list
+              .filter(row => row !== null && typeof row === 'object'
+                && typeof row.route === 'string' && typeof row.model === 'string')
+              .map(row => [`${row.route}/${row.model}`, row]))
+            at = Date.now()
+          })
+          // A badge is decoration: an older Host that cannot answer leaves the label
+          // drawn exactly as the shipped fallback would have drawn it.
+          .catch(() => { at = Date.now() })
+          .then(() => {
+            inflight = null
+            emit()
+          })
+        return inflight
+      }
+      return {
+        subscribe: (listener) => {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        get: () => rows,
+        load,
+      }
+    })()
+
+    /**
+     * Read the badge map, asking the Host once when it is cold.
+     * @returns {Map<string, object>} badge rows keyed `route/model`.
+     */
+    function useBadges() {
+      const rows = useSyncExternalStore(badgeStore.subscribe, badgeStore.get, badgeStore.get)
+      useEffect(() => { badgeStore.load() }, [])
+      return rows
+    }
+
+    /**
+     * This plugin's marks inside the shipped picker's model name.
+     *
+     * A contribution REPLACES the owner's fallback body, so the model name — and the
+     * catalog badge the fallback draws with the owner's own tag — are this component's
+     * responsibility: returning null would delete the name from the composer. Only the
+     * marks are added here; selection stays entirely the owner's.
+     *
+     * @param {object} props - `ModelLabelOwner`: provider, model, placement, selected.
+     * @returns {object} the label.
+     */
+    function ModelLabel(props) {
+      const provider = props && props.provider !== null && typeof props.provider === 'object' ? props.provider : {}
+      const model = props && props.model !== null && typeof props.model === 'object' ? props.model : {}
+      const placement = typeof props?.placement === 'string' ? props.placement : 'option'
+      useEffect(() => { ensureStylesheet() }, [])
+      const rows = useBadges()
+      const row = rows.get(`${provider.id}/${model.id}`)
+      const status = typeof row?.status === 'string' ? row.status : 'unknown'
+      const level = typeof row?.level === 'number' ? row.level : 0
+      const uses = typeof row?.uses === 'number' ? row.uses : 0
+      const name = typeof model.name === 'string' && model.name !== ''
+        ? model.name
+        : typeof model.id === 'string' ? model.id : ''
+      const badge = badgeText(model.badge === undefined ? undefined : model.badge.text)
+      return h('span', { className: 'llmm-label', 'data-placement': placement },
+        h('span', { className: 'llmm-label-name' }, name),
+        badge === '' ? null : h('span', { className: 'llmm-chip llmm-label-badge' }, badge),
+        // The collapsed trigger carries the one mark worth interrupting for: a known
+        // problem, with its reason on hover. The level is earned by use, so an untouched
+        // model claims nothing and the trigger keeps the width the owner budgeted.
+        isProblem(status)
+          ? h('span', { className: `llmm-dot ${statusTone(status)}`, title: statusLabel(status) })
+          : null,
+        placement !== 'trigger' && uses > 0 && level > 1
+          ? h('span', { className: `llmm-chip llmm-lv llmm-lv-${Math.min(level, 7)}` }, `Lv.${level}`)
+          : null,
+      )
+    }
+
+
+    // -- The composer controller --------------------------------------------
+
+    /** Rail copy for each submit phase. */
+    const PHASE_LABEL = {
+      adjudicating: 'ctlAdjudicating',
+      claimed: 'ctlClaimed',
+      submitting: 'ctlSubmitting',
+      sending: 'ctlSending',
+    }
+
+    /**
+     * Format an elapsed span for the running rail.
+     * @param {number} ms - elapsed milliseconds.
+     * @returns {string} `m:ss`.
+     */
+    function clockText(ms) {
+      const total = Math.max(0, Math.floor(ms / 1000))
+      const minutes = Math.floor(total / 60)
+      const seconds = total % 60
+      return `${minutes}:${seconds < 10 ? '0' : ''}${seconds}`
+    }
+
+    /**
+     * The composer controller: a rail that changes shape with the session, and the
+     * command palette it opens.
+     *
+     * It is additive on purpose. `conversation.composer.bar` owns the editor — IME
+     * composition, paste, slash adjudication, @-mentions, attachment drops, local
+     * echo, the hero variant — and replacing it would mean reimplementing all of
+     * that, plus losing every shipped `conversation.input.*` seat that renders
+     * inside it. This sits in `conversation.input.dock`, directly above the card,
+     * and reads the same live input state the editor publishes, so it reacts
+     * without owning a keystroke.
+     *
+     * Shapes: idle collapses to a breathing hairline, a draft expands to a meter,
+     * a submit in flight names its phase, a running turn becomes a capsule with a
+     * clock, and a turn waiting on the user says so.
+     *
+     * @param {object} props - slot props: `sessionId`, `useInput`,
+     *   `useSessionStatus`, `inputActions`, plus the model directory the
+     *   registration wrapper adds.
+     * @returns {object|null} the rail, and the palette while it is open.
+     */
+    function ComposerController(props) {
+      const sessionId = typeof props?.sessionId === 'string' ? props.sessionId : ''
+      // Read the hooks through locals: a partial Host (or the test harness) must not
+      // change the hook count between renders.
+      const useInputHook = typeof props?.useInput === 'function' ? props.useInput : () => null
+      const useStatusHook = typeof props?.useSessionStatus === 'function' ? props.useSessionStatus : () => undefined
+      const input = useInputHook(state => state)
+      const status = useStatusHook(map => (sessionId === '' ? undefined : map.get(sessionId)))
+      const actions = props?.inputActions ?? null
+
+      const directory = useMemo(() => {
+        const models = props?.modelDirectories
+        if (sessionId === '' || models === undefined || models === null) return null
+        try {
+          const found = models.directoryFor(sessionId)
+          return found !== null && typeof found === 'object' ? found : null
+        } catch { return null }
+      }, [props?.modelDirectories, sessionId])
+
+      const store = directory === null ? null : directory.store ?? null
+      // Directory stores are shipped objects, but this rail renders in EVERY session:
+      // one throwing store must not take the composer entry down with it.
+      const subscribe = useCallback(listener => {
+        if (store === null) return () => {}
+        try {
+          const off = store.subscribe(listener)
+          return typeof off === 'function' ? off : () => {}
+        } catch { return () => {} }
+      }, [store])
+      const snapshot = useCallback(() => {
+        if (store === null) return null
+        try { return store.getSnapshot() } catch { return null }
+      }, [store])
+      const catalogState = useSyncExternalStore(subscribe, snapshot, snapshot)
+
+      const railRef = useRef(null)
+      const paletteRef = useRef(null)
+      const [open, setOpen] = useState(false)
+      const [cursor, setCursor] = useState(0)
+      const [busy, setBusy] = useState('')
+      const [note, setNote] = useState('')
+      const [startedAt, setStartedAt] = useState(0)
+      const [now, setNow] = useState(() => Date.now())
+
+      useEffect(() => { ensureStylesheet() }, [])
+
+      const running = status !== undefined && status !== null && status.running === true
+      const waiting = status !== undefined && status !== null
+        && status.pendingInteraction !== undefined && status.pendingInteraction !== null
+      const phase = typeof input?.phase === 'string' ? input.phase : 'plain'
+      const draft = typeof input?.draft === 'string' ? input.draft : ''
+      const attachments = Array.isArray(input?.attachmentIds) ? input.attachmentIds.length : 0
+      const queued = Array.isArray(input?.queue) ? input.queue.length : 0
+      const mode = running
+        ? 'running'
+        : phase !== 'plain'
+          ? 'busy'
+          : draft !== '' || attachments > 0 ? 'draft' : 'idle'
+
+      // One clock, started when the turn starts and only ticked while it runs.
+      useEffect(() => {
+        if (running) {
+          setStartedAt(value => (value === 0 ? Date.now() : value))
+          setNow(Date.now())
+          return undefined
+        }
+        setStartedAt(0)
+        return undefined
+      }, [running])
+      useEffect(() => {
+        if (!running) return undefined
+        const timer = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(timer)
+      }, [running])
+
+      const current = catalogState !== null && typeof catalogState === 'object' ? catalogState.current : null
+      const route = typeof current?.provider === 'string' ? current.provider : ''
+      const model = typeof current?.model === 'string' ? current.model : ''
+      const activeEffort = typeof current?.reasoningEffort === 'string' ? current.reasoningEffort : undefined
+      // The shipped directory carries the levels; read them here rather than through
+      // the picker's index, which only exists while that menu is mounted.
+      const efforts = useMemo(() => {
+        if (catalogState === null || route === '' || model === '') return []
+        const groups = Array.isArray(catalogState.groups) ? catalogState.groups : []
+        const group = groups.find(candidate => candidate?.id === route)
+        const models = group === undefined || !Array.isArray(group.models) ? [] : group.models
+        const entry = models.find(candidate => candidate?.id === model)
+        const list = entry?.reasoning?.efforts
+        return Array.isArray(list) ? list : []
+      }, [catalogState, route, model])
+      const defaultEffort = useMemo(() => {
+        if (catalogState === null || route === '' || model === '') return undefined
+        const groups = Array.isArray(catalogState.groups) ? catalogState.groups : []
+        const group = groups.find(candidate => candidate?.id === route)
+        const models = group === undefined || !Array.isArray(group.models) ? [] : group.models
+        const found = models.find(candidate => candidate?.id === model)
+        const level = found?.reasoning?.defaultEffort
+        return typeof level === 'string' ? level : undefined
+      }, [catalogState, route, model])
+      const nameOf = id => (id === undefined ? undefined : (efforts.find(level => level.id === id)?.name ?? id))
+      const defaultName = nameOf(defaultEffort)
+
+      const close = useCallback(() => { setOpen(false); setNote('') }, [])
+      const togglePalette = useCallback(() => {
+        setNote('')
+        setOpen(value => !value)
+      }, [])
+
+      const switchEffort = async (effort) => {
+        if (directory === null || route === '' || model === '') return
+        setBusy('effort')
+        try {
+          await directory.select({
+            provider: route,
+            model,
+            ...(effort === undefined ? {} : { reasoningEffort: effort }),
+          })
+          close()
+        } catch { setNote(t('paletteSwitchFailed')) } finally { setBusy('') }
+      }
+
+      const probe = async () => {
+        if (route === '' || model === '') return
+        setBusy('probe')
+        try {
+          await callHost({ action: 'probe', route, model })
+          setNote(t('paletteProbed'))
+          if (directory !== null && typeof directory.load === 'function') directory.load()
+        } catch { setNote(t('paletteProbeFailed')) } finally { setBusy('') }
+      }
+
+      const copyId = async () => {
+        if (sessionId === '') return
+        try {
+          await navigator.clipboard.writeText(sessionId)
+          setNote(t('paletteCopied'))
+        } catch { setNote(sessionId) }
+      }
+
+      // ── the palette's model ──
+      // A tree, not one flat list. The root answers "what can I do here"; a page is
+      // entered only when a command needs a choice. The reasoning levels used to sit
+      // in the root, where eight stops of one setting outnumbered every other command
+      // and pushed them off the first screen — that is what made this read as a
+      // second copy of the level picker instead of a command list.
+      const levelNow = activeEffort === undefined ? t('ctlAuto') : (nameOf(activeEffort) ?? activeEffort)
+      const [query, setQuery] = useState('')
+      const [page, setPage] = useState('root')
+      const [result, setResult] = useState(null)
+      const searchRef = useRef(null)
+
+      // The batch probe targets the route the session is on. The dialog's "probe all"
+      // means "what is on screen"; there is no screen here, so "this route" is the
+      // only scope that means something.
+      const routeModels = useMemo(() => {
+        if (catalogState === null || route === '') return []
+        const groups = Array.isArray(catalogState.groups) ? catalogState.groups : []
+        const group = groups.find(candidate => candidate?.id === route)
+        const models = group === undefined || !Array.isArray(group.models) ? [] : group.models
+        return models
+          .filter(entry => typeof entry?.id === 'string' && entry.id !== '')
+          .map(entry => ({ route, model: entry.id }))
+      }, [catalogState, route])
+
+      const levelItems = useMemo(() => {
+        const list = efforts.map(level => ({
+          key: `level-${level.id}`,
+          label: typeof level.name === 'string' && level.name !== '' ? level.name : level.id,
+          hint: level.id === activeEffort ? t('paletteCurrent') : '',
+          alias: `level effort ${level.id} 档位`,
+          run: async () => {
+            await directory.select({ provider: route, model, reasoningEffort: level.id })
+          },
+        }))
+        list.push({
+          key: 'level-auto',
+          label: t('ctlAuto'),
+          hint: activeEffort === undefined ? t('paletteCurrent') : (defaultName ?? ''),
+          alias: 'auto default 自动 默认 省略',
+          run: async () => {
+            await directory.select({ provider: route, model })
+          },
+        })
+        return list
+      }, [efforts, activeEffort, defaultName, directory, route, model])
+
+      const groups = useMemo(() => {
+        const session = []
+        const modelGroup = []
+        const diag = []
+        const manage = []
+        if (actions !== null && typeof actions.submit === 'function') {
+          session.push({
+            key: 'send',
+            label: t('paletteSend'),
+            hint: '\u23ce',
+            alias: 'send submit 发送 提交',
+            disabled: draft.trim() === '' || phase !== 'plain',
+            run: async () => { actions.submit() },
+          })
+        }
+        if (actions !== null && typeof actions.setDraft === 'function') {
+          session.push({
+            key: 'clear',
+            label: t('paletteClear'),
+            hint: '\u232b',
+            alias: 'clear wipe 清空 清除',
+            disabled: draft === '',
+            run: async () => { actions.setDraft('') },
+          })
+        }
+        if (sessionId !== '') {
+          session.push({
+            key: 'copy-id',
+            label: t('paletteCopyId'),
+            hint: sessionId.slice(0, 8),
+            alias: 'copy id session 复制 会话',
+            answer: true,
+            run: async () => {
+              try {
+                await navigator.clipboard.writeText(sessionId)
+                return t('paletteCopied')
+              } catch { return sessionId }
+            },
+          })
+        }
+        modelGroup.push({
+          key: 'levels',
+          label: `${t('ctlEffort')} \u00b7 ${levelNow}`,
+          hint: '\u203a',
+          alias: 'level effort reasoning 档位 推理 思考',
+          disabled: efforts.length === 0,
+          fail: t('paletteNoLevels'),
+          open: 'levels',
+        })
+        if (route !== '' && model !== '') {
+          modelGroup.push({
+            key: 'probe',
+            label: t('paletteProbe'),
+            hint: `${route}/${model}`,
+            alias: 'probe health 探活 检测 健康',
+            answer: true,
+            fail: t('paletteProbeFailed'),
+            run: async () => {
+              await callHost({ action: 'probe', route, model })
+              if (directory !== null && typeof directory.load === 'function') directory.load()
+              return t('paletteProbed')
+            },
+          })
+          modelGroup.push({
+            key: 'probe-all',
+            label: t('paletteProbeAll'),
+            hint: String(routeModels.length),
+            alias: 'probe all batch 批量 全部 探活',
+            answer: true,
+            fail: t('paletteProbeFailed'),
+            disabled: routeModels.length === 0,
+            run: async () => {
+              await callHost({ action: 'probeBatch', targets: routeModels })
+              return t('paletteProbeAllSent')
+            },
+          })
+        }
+        diag.push({
+          key: 'sync',
+          label: t('paletteSync'),
+          hint: '',
+          alias: 'sync refresh gateway catalogue 刷新 重拉 目录',
+          answer: true,
+          run: async () => {
+            await callHost({ action: 'snapshot', forceDirectory: true })
+            if (directory !== null && typeof directory.load === 'function') directory.load()
+            return t('paletteSyncDone')
+          },
+        })
+        diag.push({
+          key: 'failover-log',
+          label: t('paletteFailoverLog'),
+          hint: '\u203a',
+          alias: 'failover fallback log 故障 切换 降级',
+          run: async () => { openManager('failover') },
+        })
+        diag.push({
+          key: 'probe-records',
+          label: t('paletteProbeRecords'),
+          hint: '\u203a',
+          alias: 'probe records log 探活 记录 历史',
+          run: async () => { openManager('records') },
+        })
+        manage.push({
+          key: 'manager',
+          label: t('managerOpen'),
+          hint: '\u2318\u21e7M',
+          alias: 'manage models dialog catalog 管理 模型',
+          run: async () => { openManager('catalog') },
+        })
+        return [
+          { id: 'session', title: t('paletteGroupSession'), items: session },
+          { id: 'model', title: t('paletteGroupModel'), items: modelGroup },
+          { id: 'diag', title: t('paletteGroupDiag'), items: diag },
+          { id: 'manage', title: t('paletteGroupManage'), items: manage },
+        ].filter(group => group.items.length > 0)
+      }, [actions, draft, phase, sessionId, efforts.length, levelNow, route, model, routeModels, directory, openManager, t])
+
+      // Subsequence matching, not substring: "th" finds 探活 and "mdl" finds the
+      // dialog row, which is what makes typing an alias faster than reading a list.
+      const shown = useMemo(() => {
+        const match = (item) => {
+          const needle = query.trim().toLowerCase()
+          if (needle === '') return true
+          const hay = `${item.label} ${item.hint ?? ''} ${item.alias ?? ''}`.toLowerCase()
+          let at = 0
+          for (const character of needle) {
+            if (character === ' ') continue
+            const found = hay.indexOf(character, at)
+            if (found < 0) return false
+            at = found + 1
+          }
+          return true
+        }
+        const pages = page === 'root'
+          ? groups
+          : [{ id: 'levels', title: '', items: levelItems }]
+        const filtered = pages
+          .map(group => ({ ...group, items: group.items.filter(match) }))
+          .filter(group => group.items.length > 0)
+        let index = 0
+        // The flat index is what the arrow keys walk; group headers are not stops.
+        return filtered.map(group => ({
+          ...group,
+          items: group.items.map(item => ({ ...item, index: index++ })),
+        }))
+      }, [groups, levelItems, page, query])
+      const flat = useMemo(() => shown.flatMap(group => group.items), [shown])
+
+      const busyRef = useRef('')
+      busyRef.current = busy
+
+      const answer = async (item) => {
+        if (item === null || item === undefined) return
+        if (item.disabled === true || busyRef.current !== '') return
+        if (typeof item.open === 'string') {
+          setPage(item.open)
+          setQuery('')
+          setCursor(0)
+          return
+        }
+        // A command that answers stays open to show the answer; one that acts closes,
+        // because the composer is where its result lands.
+        if (item.answer !== true) { close(); setOpen(false) }
+        setBusy(item.key)
+        setResult(null)
+        try {
+          const text = await item.run()
+          if (typeof text === 'string' && text !== '') setResult({ key: item.key, text, ok: true })
+        } catch (failure) {
+          const text = isStaleHost(failure)
+            ? t('hostStale')
+            : (typeof item.fail === 'string' ? item.fail : t('paletteFailed'))
+          setResult({ key: item.key, text, ok: false })
+        } finally {
+          setBusy('')
+        }
+      }
+      const answerRef = useRef(answer)
+      answerRef.current = answer
+      const flatRef = useRef(flat)
+      flatRef.current = flat
+      const cursorRef = useRef(cursor)
+      cursorRef.current = cursor
+      const pageRef = useRef(page)
+      pageRef.current = page
+      const queryRef = useRef(query)
+      queryRef.current = query
+
+      useEffect(() => {
+        if (!open) return
+        const node = searchRef.current
+        if (node !== null && typeof node.focus === 'function') node.focus()
+      }, [open, page])
+
+      // One document listener: the shortcut has to reach us even while the editor
+      // owns the focus, and while the palette is open Enter must not also submit.
+      useEffect(() => {
+        if (typeof document === 'undefined') return undefined
+        const onKeyDown = (event) => {
+          const meta = event.metaKey || event.ctrlKey
+          // Shift+letter reaches the same dialog from anywhere in the session, which
+          // is the only route to it while the shipped picker owns the model seat.
+          if (meta && event.shiftKey && !event.altKey && (event.key === 'm' || event.key === 'M')) {
+            event.preventDefault()
+            close()
+            openManager('catalog')
+            return
+          }
+          if (meta && !event.altKey && (event.key === 'k' || event.key === 'K' || event.key === 'j' || event.key === 'J')) {
+            event.preventDefault()
+            setNote('')
+            setResult(null)
+            setQuery('')
+            setPage('root')
+            setCursor(0)
+            setOpen(value => !value)
+            return
+          }
+          if (!open) return
+          const back = () => {
+            setPage('root')
+            setQuery('')
+            setCursor(0)
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            // Three shelves: the page, the search word, then the panel itself.
+            if (pageRef.current !== 'root') back()
+            else if (queryRef.current !== '') { setQuery(''); setCursor(0) }
+            else close()
+            return
+          }
+          if (event.key === 'Backspace' && queryRef.current === '' && pageRef.current !== 'root') {
+            event.preventDefault()
+            back()
+            return
+          }
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault()
+            const list = flatRef.current
+            if (list.length === 0) return
+            const step = event.key === 'ArrowDown' ? 1 : -1
+            setCursor(value => (value + step + list.length) % list.length)
+            return
+          }
+          if (event.key === 'Enter') {
+            const item = flatRef.current[cursorRef.current]
+            if (item === undefined) return
+            event.preventDefault()
+            event.stopPropagation()
+            answerRef.current(item)
+          }
+        }
+        document.addEventListener('keydown', onKeyDown, true)
+        // A palette is dismissed by leaving it, not only with Esc. The panel is fixed
+        // (the composer card would clip an anchored popover), so "outside" is decided
+        // against the panel node itself; the rail stays exempt so its own button can
+        // still toggle the panel shut.
+        const onPointerDown = (event) => {
+          const panel = paletteRef.current
+          const railNode = railRef.current
+          if (panel !== null && panel.contains(event.target)) return
+          if (railNode !== null && railNode.contains(event.target)) return
+          setOpen(false)
+          setNote('')
+          setResult(null)
+        }
+        document.addEventListener('pointerdown', onPointerDown, true)
+        return () => {
+          document.removeEventListener('keydown', onKeyDown, true)
+          document.removeEventListener('pointerdown', onPointerDown, true)
+        }
+      }, [open, close, openManager])
+
+      const parts = []
+      if (mode === 'running') parts.push(`${t('ctlRunning')} ${clockText(now - startedAt)}`)
+      else if (mode === 'busy') parts.push(t(PHASE_LABEL[phase] ?? 'ctlSending'))
+      else if (mode === 'draft') parts.push(`${t('ctlDraft')} ${draft.trim().length} ${t('ctlChars')}`)
+      else parts.push(t('ctlIdle'))
+      if (waiting) parts.push(t('ctlWaiting'))
+      if (attachments > 0) parts.push(`${attachments} ${t('ctlAttach')}`)
+      if (queued > 0) parts.push(`${queued} ${t('ctlQueued')}`)
+
+      // Inline, inside the composer card. Only what the session is doing right now
+      // gets drawn; the two entries stay put.
+      const worth = mode !== 'idle' || waiting || attachments > 0 || queued > 0
+      const rail = h('div', { className: 'llmm-ctl', 'data-mode': mode, ref: railRef },
+        worth ? h('span', { className: 'llmm-ctl-dot', 'aria-hidden': true }) : null,
+        worth
+          ? h('span', { className: 'llmm-ctl-text', role: 'status', 'aria-live': 'polite' }, parts.join(' \u00b7 '))
+          : null,
+        // No level control here on purpose: the model trigger a few pixels away
+        // already names the level and opens the panel that owns it. Two controls for
+        // one fact read as two different facts — that is what made this cluster look
+        // like a second, competing model switcher.
+        h('button', {
+          type: 'button',
+          className: 'llmm-ctl-icon',
+          'aria-label': t('managerOpen'),
+          title: `${t('managerOpen')} \u00b7 \u2318\u21e7M`,
+          onClick: () => { close(); openManager() },
+        }, h(Icon, { name: 'sliders' })),
+        h('button', {
+          type: 'button',
+          className: 'llmm-ctl-key',
+          'aria-label': t('ctlPaletteOpen'),
+          title: t('ctlPaletteOpen'),
+          onClick: togglePalette,
+        }, t('ctlKey')),
+      )
+
+      const palette = open
+        ? createPortal(h('div', {
+          className: 'llmm-pal',
+          ref: paletteRef,
+          role: 'dialog',
+          'aria-label': t('paletteTitle'),
+          'aria-busy': busy !== '',
+          onMouseDown: event => { if (event.target === event.currentTarget) close() },
+        },
+          h('div', { className: 'llmm-pal-head' },
+            page === 'root'
+              ? h('input', {
+                className: 'llmm-pal-search',
+                ref: searchRef,
+                type: 'search',
+                value: query,
+                placeholder: t('paletteSearch'),
+                'aria-label': t('paletteSearch'),
+                onChange: event => { setQuery(event.target.value); setCursor(0) },
+              })
+              : h('button', {
+                type: 'button',
+                className: 'llmm-pal-back',
+                onClick: () => { setPage('root'); setQuery(''); setCursor(0) },
+              }, `\u2039 ${t('ctlEffort')}`),
+            h('span', {
+              className: `llmm-pal-note${result !== null && result.ok === false ? ' llmm-pal-bad' : ''}`,
+              role: 'status',
+              'aria-live': 'polite',
+            }, result !== null ? result.text : (busy !== '' ? t('paletteWorking') : 'esc')),
+          ),
+          h('ul', { className: 'llmm-pal-list', role: 'listbox', 'aria-label': t('paletteTitle') },
+            shown.length === 0
+              ? h('li', { className: 'llmm-pal-empty' }, t('paletteEmpty'))
+              : shown.flatMap(group => [
+                h('li', { key: `g-${group.id}`, className: 'llmm-pal-group', role: 'presentation' }, group.title),
+                ...group.items.map(item => {
+                  const running = busy === item.key
+                  const answered = result !== null && result.key === item.key ? result.text : ''
+                  return h('li', {
+                    key: item.key,
+                    className: `llmm-pal-item${item.index === cursor ? ' llmm-pal-on' : ''}${item.disabled === true ? ' llmm-pal-off' : ''}`,
+                    role: 'option',
+                    'aria-selected': item.index === cursor,
+                    'aria-disabled': item.disabled === true,
+                  },
+                    h('button', {
+                      type: 'button',
+                      className: 'llmm-pal-run',
+                      disabled: item.disabled === true || (busy !== '' && !running),
+                      onMouseEnter: () => setCursor(item.index),
+                      onClick: () => { answer(item) },
+                    },
+                      h('span', { className: 'llmm-pal-label' }, item.label),
+                      running ? h('span', { className: 'llmm-pal-spin', 'aria-hidden': true }) : null,
+                      answered !== ''
+                        ? h('span', {
+                          className: `llmm-pal-hint ${result !== null && result.ok === false ? 'llmm-pal-bad' : 'llmm-pal-ok'}`,
+                        }, answered)
+                        : (item.hint === '' || running ? null : h('span', { className: 'llmm-pal-hint' }, item.hint)),
+                    ),
+                  )
+                }),
+              ]),
+          ),
+        ), document.body)
+        : null
+
+      return h(React.Fragment, null, rail, palette)
     }
 
     return {
@@ -2567,6 +4961,60 @@ window.__ModuleLoader__.load({
           order: 5,
         }, FallbackBanner))
 
+        // The composer controls: the two entries and the live status, inside the card
+        // just before the submit action. The shipped bar keeps every behaviour it
+        // owns; only the model seat is ours (selector.mode: managed).
+        ctx.slots.inject('conversation.input.right', () => ctx.slots.register({
+          name: 'conversation.input.right',
+          id: 'llm-manage-rail',
+          order: 0,
+        }, props => h(ComposerController, { modelDirectories: ctx.modelDirectories, ...props })))
+
+        // The manager dialog rides the shell overlay: it is a profile-wide surface
+        // (one catalog, one fallback policy), so it must not be clipped by the
+        // composer row or by the sidebar column.
+        try {
+          ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+            name: 'shell.overlay',
+            id: 'llm-manage-manager',
+            order: 30,
+          }, props => h(ManagerDialog, {
+            ...props,
+            // One navigation action, the same call the shipped sidebar makes: selecting a
+            // Session and showing it. Refused rather than thrown when the face is absent,
+            // because a history row that cannot navigate is still worth reading.
+            openSession: (sessionId) => {
+              try {
+                uiWorkspace?.openSession?.(sessionId)
+              } catch {
+                // Navigation is best effort; the row stays as it was.
+              }
+            },
+            // A name that cannot go anywhere must not look clickable: the row still
+            // names the Session, it just stops pretending to be a link. The overlay may
+            // answer this itself; when it does not, the navigator's presence decides.
+            canOpenSession: typeof props.canOpenSession === 'function'
+              ? props.canOpenSession
+              : () => uiWorkspace !== null,
+          })))
+        } catch {
+          // A client without the shell overlay keeps the settings panel, which
+          // reaches every action this dialog offers.
+        }
+
+        // The plugin's own marks INSIDE the shipped picker's model name. Registered in
+        // both modes: `managed` shadows the owner's control, where this then simply
+        // never renders, and `native` is exactly the case it exists for.
+        try {
+          ctx.slots.inject('conversation.input.model.label', () => ctx.slots.register({
+            name: 'conversation.input.model.label',
+            id: 'llm-manage-label',
+          }, ModelLabel))
+        } catch {
+          // A Host whose client predates the label slot: the marks are decoration, and
+          // everything else this plugin does keeps working without them.
+        }
+
         // Shadow the shipped picker at priority -1 (lowest renders) so pins and
         // favorites come first. The seat is `single`, so this registration must
         // supply the business face the shipped one does: the same directory
@@ -2575,6 +5023,30 @@ window.__ModuleLoader__.load({
         // Only in `managed` mode: `native` exists precisely to hand the seat back
         // to the shipped picker, and registering here regardless is what made that
         // setting inert.
+        // The team switch is driven through the same remote the shipped row uses.
+        // Captured through a nested inject so this plugin still mounts on a client
+        // that does not install the capability: the row then reports the failure
+        // instead of the whole picker disappearing over a service the reader may
+        // never have had.
+        let agentTeams = null
+        try {
+          ctx.inject(['remote.agentTeams'], (scope) => {
+            agentTeams = scope.remote.agentTeams
+            return () => { agentTeams = null }
+          })
+        } catch { /* the row reports the cap */
+        }
+        // Navigation lives on the workspace face, not on the Session list. Captured the
+        // same lazy way so a client without it still mounts: the history then names the
+        // Session as plain text instead of pretending to be a link.
+        let uiWorkspace = null
+        try {
+          ctx.inject(['uiWorkspace'], (scope) => {
+            uiWorkspace = scope.uiWorkspace
+            return () => { uiWorkspace = null }
+          })
+        } catch { /* the chip renders as a label */
+        }
         const releasePicker = ctx.slots.inject('conversation.input.model', () => {
           const models = ctx.modelDirectories
           const sessions = ctx.sessions
@@ -2596,6 +5068,12 @@ window.__ModuleLoader__.load({
                 select: (selection) => available
                   ? directory.select(selection)
                   : Promise.resolve(undefined),
+                // The switch verb stays lazy: the remote arrives after mount on a
+                // cold client, and a row that captured `null` at register time
+                // would claim the capability is missing forever.
+                setTeamEnabled: (id, enabled) => (agentTeams === null
+                  ? Promise.resolve(undefined)
+                  : agentTeams.setEnabled(id, enabled)),
               }
             },
           }, Picker)
