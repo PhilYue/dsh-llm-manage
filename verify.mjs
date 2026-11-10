@@ -738,6 +738,170 @@ check('a switch the answering model confirms is reported as reached',
   `outcome=${reached?.outcome} to=${reached?.to?.model ?? 'null'} asked=${target.model}`)
 check('an unrelated session gets no banner', (await call({ action: 'fallbackLog', sessionId: 'sess-never-used' })).body?.value === null)
 
+// ── a repair is not allowed to end the conversation ─────────────────────────
+// Switching the model used to be the end of the story: the session moved, the turn
+// had failed, and the person had to type something to find out whether the new model
+// could finish the work. A repair that stops mid-task is a repair the person has to
+// supervise, so the controller now queues the continuation turn itself — and says so
+// in the record instead of leaving the interval unexplained.
+const repairedAgent = (n) => ({
+  id: `sess-${n}`,
+  session: { id: `sess-${n}` },
+  status: 'idle',
+  inbox: { nextStep: [], nextTurn: [] },
+  followed: [],
+  followup(message) { this.followed.push(message) },
+})
+const turnEnd = (sessionId, turn = 1) => emitSession(sessionId, {
+  type: 'turn/end',
+  seq: 2,
+  time: Date.now(),
+  data: { turn, reason: { kind: 'error', error: { message: 'quota exhausted', code: 'RATE_LIMIT' } } },
+})
+const settle = (ms = 120) => new Promise(resolve => setTimeout(resolve, ms))
+const textOf = (message) => (Array.isArray(message?.content) ? message.content : [])
+  .filter(part => part?.type === 'text').map(part => part.text).join('\n')
+
+{
+  const a = repairedAgent(50)
+  await observe(a, at(2))
+  await fireError(a, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  check('a decided repair has queued nothing before the turn boundary',
+    a.followed.length === 0, `queued=${a.followed.length}`)
+  turnEnd('sess-50')
+  await settle()
+  check('an unrecovered repair queues the continuation turn itself',
+    a.followed.length === 1, `queued=${a.followed.length}`)
+  const continuation = a.followed[0]
+  check('the continuation is addressed as a repair, not as the person speaking',
+    continuation?.role === 'user' && continuation?.source?.kind === 'llm-manage-repair'
+    && typeof continuation?.id === 'string' && continuation.id !== '',
+    `role=${continuation?.role ?? 'none'} source=${continuation?.source?.kind ?? 'none'}`)
+  const text = textOf(continuation)
+  check('the continuation tells the model to check the real state before going on',
+    /check the actual state/i.test(text) && /do not repeat/i.test(text) && text.includes('/'),
+    text.slice(0, 90).replace(/\n/g, ' '))
+  const reported = await logFor('sess-50')
+  check('the record says whether the work was picked back up',
+    reported?.continued === true && reported?.continueRefused === undefined,
+    `continued=${reported?.continued} refused=${reported?.continueRefused ?? 'none'}`)
+}
+
+{
+  // Someone else's message is already waiting, and it will be answered by the new
+  // model. Queueing a second turn would interleave two replies to one interruption.
+  const b = repairedAgent(51)
+  b.inbox.nextTurn.push({ id: 'waiting' })
+  await observe(b, at(2))
+  await fireError(b, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  turnEnd('sess-51')
+  await settle()
+  const refused = await logFor('sess-51')
+  check('a message already waiting is left to the new model rather than duplicated',
+    b.followed.length === 0 && /already waiting/i.test(String(refused?.continueRefused ?? '')),
+    `queued=${b.followed.length} refused=${String(refused?.continueRefused ?? 'none')}`)
+}
+
+{
+  // Two repairs per request is the budget: enough to survive a second bad model,
+  // few enough that a permanently broken route stops instead of looping.
+  const c = repairedAgent(52)
+  const round = async () => {
+    await observe(c, at(2))
+    await fireError(c, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+    turnEnd('sess-52')
+    await settle()
+  }
+  await round()
+  await round()
+  await round()
+  const spent = await logFor('sess-52')
+  check('the continuation budget stops a repair loop at two turns',
+    c.followed.length === 2, `queued=${c.followed.length} refused=${String(spent?.continueRefused ?? 'none')}`)
+  check('a spent budget is reported as a refusal rather than silence',
+    /already continued/i.test(String(spent?.continueRefused ?? '')), String(spent?.continueRefused ?? 'none'))
+}
+
+{
+  // A person speaking again is a new request, so the budget starts over. Without the
+  // reset, one long conversation would permanently lose its ability to recover.
+  const d = repairedAgent(53)
+  d.inbox.nextTurn.push({ id: 'fresh-question', source: { kind: 'user' } })
+  for (const l of listeners['agent/inbox/claimed'] ?? []) {
+    l({ agent: d, message: { id: 'fresh-question', source: { kind: 'user' } } })
+  }
+  d.inbox.nextTurn.length = 0
+  const round = async () => {
+    await observe(d, at(2))
+    await fireError(d, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+    turnEnd('sess-53')
+    await settle()
+  }
+  await round()
+  await round()
+  await round()
+  check('a person speaking again restores the continuation budget',
+    d.followed.length === 2, `queued=${d.followed.length}`)
+}
+
+{
+  // The five-second blip: the shipped policy retries on the same model, and taking the
+  // model away on the first failure is what makes a transient outage expensive.
+  const e = AGENT_FOR(54)
+  await observe(e, at(2))
+  const before = sessionCalls.length
+  let action
+  for (const l of listeners['agent/request-error'] ?? []) {
+    action = await l.call({}, {
+      agent: e,
+      turn: 1,
+      step: 1,
+      provider: ROUTE,
+      failure: { status: 503, message: gatewayBody(503, '模型服务异常') },
+      retryPolicy: { mode: 'normal', maxRetries: 2, retryableCodes: ['SERVER_ERROR'] },
+      signal: new AbortController().signal,
+    }, () => Promise.resolve({ kind: 'retry' }))
+  }
+  check('a transient failure is handed to the shipped retry policy before any switch',
+    action?.kind === 'retry' && sessionCalls.length === before,
+    `action=${action?.kind ?? 'none'} moves=${sessionCalls.length - before}`)
+  check('a transient failure leaves no repair debt behind',
+    (await logFor('sess-54')) === null, String(await logFor('sess-54')))
+}
+
+{
+  // Context overflow and bad parameters fail the same way on every route, so a switch
+  // would spend the chain to re-learn one fact and bury the error worth reading.
+  const f = AGENT_FOR(55)
+  await observe(f, at(2))
+  const before = sessionCalls.length
+  const action = await fireError(f, {
+    code: 'INVALID_REQUEST',
+    status: 400,
+    message: JSON.stringify({ error: { code: 'invalid_request', message: 'invalid parameter: max_tokens' } }),
+  })
+  check('a malformed request is never blamed on the model',
+    sessionCalls.length === before && action === undefined,
+    `moves=${sessionCalls.length - before} action=${action?.kind ?? 'none'}`)
+}
+
+{
+  // A level repair is the same interruption with a different cause: the model stays,
+  // the selection is cleared, and the work still has to be picked back up.
+  const g = repairedAgent(56)
+  await observe(g, at(0))
+  await fireError(g, {
+    code: 'UNSUPPORTED_REASONING_EFFORT',
+    status: 400,
+    message: `provider "${ROUTE}" model "${at(0)}" does not support reasoning effort "High"`,
+  })
+  turnEnd('sess-56')
+  await settle()
+  check('a level repair also continues the work instead of asking the person',
+    g.followed.length === 1 && g.followed[0]?.source?.clearedEffort === true,
+    `queued=${g.followed.length} cleared=${String(g.followed[0]?.source?.clearedEffort)}`)
+}
+
 // ── the switch history outlives the session that produced it ────────────────
 // The banner answers "what happened in this turn" and is gone at the next reload.
 // "Which model keeps costing me a retry" is a question about the profile, and it
@@ -1161,6 +1325,38 @@ check('an unrelated session gets no banner', (await call({ action: 'fallbackLog'
   check('the policy can be put back',
     restored.body?.value?.enabled === true && (restored.body?.value?.chain ?? []).length === 0,
     JSON.stringify(restored.body?.value ?? null))
+}
+
+// ── the recovery policy the same dialog exposes ──────────────────────────────
+// Both halves default to on, and both are overridable without editing the profile
+// the plugin was loaded from.
+{
+  const initial = await call({ action: 'recoveryConfig' })
+  check('the recovery policy is readable and defaults to doing the work',
+    initial.body?.ok === true
+      && initial.body.value?.retryFirst === true
+      && initial.body.value?.autoContinue === true,
+    JSON.stringify(initial.body?.value ?? null))
+
+  const refused = await call({ action: 'setRecovery' })
+  check('a recovery write with neither switch is refused',
+    refused.status === 400 && /retryFirst or autoContinue/.test(refused.body?.error ?? ''),
+    `${refused.status} ${refused.body?.error ?? ''}`)
+
+  const saved = await call({ action: 'setRecovery', autoContinue: false, retryFirst: false })
+  check('a saved recovery policy comes back from the same place',
+    saved.body?.value?.autoContinue === false && saved.body?.value?.retryFirst === false,
+    JSON.stringify(saved.body?.value ?? null))
+
+  const fresh = await call({ action: 'snapshot' })
+  check('a saved recovery policy is what the manager renders',
+    fresh.body?.value?.recovery?.autoContinue === false && fresh.body?.value?.recovery?.retryFirst === false,
+    JSON.stringify(fresh.body?.value?.recovery ?? null))
+
+  const back = await call({ action: 'setRecovery', autoContinue: true, retryFirst: true })
+  check('the recovery policy can be put back',
+    back.body?.value?.autoContinue === true && back.body?.value?.retryFirst === true,
+    JSON.stringify(back.body?.value ?? null))
 }
 
 // The probe log answers "what happened", which the per-model health record cannot.

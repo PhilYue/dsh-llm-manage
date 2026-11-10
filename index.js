@@ -111,6 +111,16 @@ const MAX_FALLBACKS_PER_TURN = 3
 const PROBE_FRESH_MS = 6 * 60 * 60 * 1000
 
 /**
+ * Automatic continuations allowed per human request before the turn is handed back.
+ *
+ * One model switch that lands needs one continuation to prove it. Two covers "the
+ * replacement also stumbled", which is an ordinary bad-network day. Beyond that it
+ * is a loop with a token bill, and a loop is exactly what a person must see instead
+ * of having it papered over.
+ */
+const MAX_CONTINUATIONS_PER_REQUEST = 2
+
+/**
  * Business codes this plugin's gateway reports in its error body.
  *
  * The gateway reports a per-model quota exhaustion as `429`, which DSH's own
@@ -148,6 +158,13 @@ const REASON = {
    * must not be recorded against the model's health or spend a fallback.
    */
   EFFORT: 'unsupported_effort',
+  /**
+   * The request itself was rejected as malformed — too long, an unknown parameter,
+   * an invalid tool argument. Every model on every route would reject it the same
+   * way, so switching is not recovery: it is spending the whole fallback chain to
+   * re-learn one fact, and losing the original error while doing it.
+   */
+  SHAPE: 'request_shape',
   /** A probe or request failed for any other reason. */
   ERROR: 'error',
   /** Verified reachable. */
@@ -232,6 +249,14 @@ function classifyFailure(failure) {
   }
   if (/model not support|not supported for this (?:route|protocol)|unsupported (?:protocol|model)/i.test(text)) {
     return { reason: REASON.PROTOCOL, detail, scope: 'model', switchable: true }
+  }
+  // The request is what is wrong, not the model that refused it. Context overflow
+  // and bad parameters fail identically on every route, so a switch here spends the
+  // whole chain to re-learn one fact and buries the error that says what to fix.
+  if (failure?.code === 'INVALID_REQUEST'
+    || failure?.status === 413
+    || /context (?:length|window)|maximum context|too many tokens|prompt is too long|invalid[_ ]request|invalid parameter|schema validation/i.test(text)) {
+    return { reason: REASON.SHAPE, detail, scope: 'request', switchable: false }
   }
   return { reason: REASON.ERROR, detail, scope: 'model', switchable: true }
 }
@@ -424,6 +449,7 @@ function resolveConfig(raw) {
   const directory = config.directory !== null && typeof config.directory === 'object' ? config.directory : {}
   const fallback = config.fallback !== null && typeof config.fallback === 'object' ? config.fallback : {}
   const usage = config.usage !== null && typeof config.usage === 'object' ? config.usage : {}
+  const recovery = config.recovery !== null && typeof config.recovery === 'object' ? config.recovery : {}
   const chain = Array.isArray(fallback.chain)
     ? fallback.chain.map(entry => cleanString(entry)).filter(entry => entry !== undefined)
     : []
@@ -439,6 +465,20 @@ function resolveConfig(raw) {
     },
     directory: { ttlMs: nonNegativeInt(directory.ttlMs, 30 * 60 * 1000) },
     fallback: { enabled: fallback.enabled !== false, chain },
+    recovery: {
+      /**
+       * Send a continuation turn after a repair, instead of waiting for the person.
+       * Automatic recovery that stops one keystroke short of recovery is the thing
+       * this option exists to end.
+       */
+      autoContinue: recovery.autoContinue !== false,
+      /**
+       * Let the platform's own retry policy try the SAME model before this plugin
+       * spends a fallback. A 503 blip is not a sick model, and swapping models for
+       * one is how a good model gets a reputation it did not earn.
+       */
+      retryFirst: recovery.retryFirst !== false,
+    },
     usage: {
       /** Count real model round-trips into the per-model proficiency ledger. */
       enabled: usage.enabled !== false,
@@ -705,7 +745,9 @@ function normalizeUsage(raw) {
  */
 function carriedSections(raw) {
   const out = {}
-  for (const key of ['fallback', 'manual']) {
+  // `recovery` is the same shape as `fallback`: a small object of switches. Leaving it
+  // out of this list would let the next read erase a preference the user just set.
+  for (const key of ['fallback', 'manual', 'recovery']) {
     const value = raw[key]
     if (value !== null && typeof value === 'object' && !Array.isArray(value)) out[key] = value
   }
@@ -848,12 +890,23 @@ export function apply(ctx, rawConfig) {
   const noAutoSwitch = new Set()
   /** Switches decided but not yet proven, keyed by session id. */
   const pendingSwitch = new Map()
+  /**
+   * Repairs that still owe the session a continuation, keyed by session id.
+   *
+   * A repair moves the Session's model. The platform freezes the model for the step
+   * that already began, so that move only takes effect on the NEXT request — and the
+   * next request used to be whatever the person typed after noticing the failure. This
+   * record is the debt: it is what turns "the model changed" into "the work resumed".
+   */
+  const wantContinue = new Map()
+  /** Continuations already spent on the current human request, keyed by session id. */
+  const continuations = new Map()
   /** Automatic switches already spent, per `sessionId/turn`. */
   const fallbacksThisTurn = new Map()
   /** Routes whose gateway directory was fetched, and when. */
   const directoryCache = new Map()
   /** Diagnostics counters, surfaced through the tool so the user can see real behaviour. */
-  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, refusals: [], bySession: {}, usageCounted: 0, usageSeed: undefined, effortHeals: [], repairsApplied: 0 }
+  const diagnostics = { startedAt: Date.now(), observed: 0, classified: {}, fallbacks: 0, continuations: 0, refusals: [], bySession: {}, usageCounted: 0, usageSeed: undefined, effortHeals: [], repairsApplied: 0 }
   /** Level repairs per agent/turn, so a truly broken config cannot loop. */
   const effortHealAttempts = new Set()
 
@@ -918,6 +971,24 @@ export function apply(ctx, rawConfig) {
       chain.push(entry)
     }
     return { enabled, chain }
+  }
+
+  /**
+   * The recovery policy in force: what the UI saved, else the Loader row's config.
+   *
+   * Same reasoning as the fallback chain: this is a preference, so it lives in the
+   * config document instead of being rewritten into the profile the plugin was
+   * loaded from.
+   *
+   * @returns {Promise<{ retryFirst: boolean, autoContinue: boolean }>} the policy.
+   */
+  async function effectiveRecovery() {
+    const overlay = await store.read(CONFIG_DOC)
+    const stored = overlay.recovery !== null && typeof overlay.recovery === 'object' ? overlay.recovery : {}
+    return {
+      retryFirst: typeof stored.retryFirst === 'boolean' ? stored.retryFirst : config.recovery.retryFirst,
+      autoContinue: typeof stored.autoContinue === 'boolean' ? stored.autoContinue : config.recovery.autoContinue,
+    }
   }
 
   /**
@@ -2129,6 +2200,7 @@ export function apply(ctx, rawConfig) {
         listed: listedKeys.has(entry.model),
       })),
       fallbackEnabled: fallback.enabled,
+      recovery: await effectiveRecovery(),
       /** The policy itself, so the manager can edit what it shows. */
       fallback,
       usage: {
@@ -2318,6 +2390,19 @@ export function apply(ctx, rawConfig) {
     } catch {
       // Logging is diagnostic only and must never break recovery.
     }
+    if ((await effectiveRecovery()).autoContinue) {
+      wantContinue.set(agent.id, {
+        agent,
+        turn,
+        from: previous,
+        to: { route: next.route, model: next.model },
+        // The switch is a model move; the level the dead model was asked for does not
+        // travel with it, so the continuation says only what happened.
+        clearedEffort: false,
+        reason: verdict.reason,
+        detail: verdict.detail,
+      })
+    }
     return { ok: true, route: next.route, model: next.model, previous, reason: verdict.reason }
   }
 
@@ -2372,7 +2457,123 @@ export function apply(ctx, rawConfig) {
     } catch {
       // Logging is diagnostic only and must never break recovery.
     }
+    if ((await effectiveRecovery()).autoContinue) {
+      // The same debt as a switch, for the same reason: the level was repaired for the
+      // NEXT request, and leaving that request to the person is the bug this fixes.
+      wantContinue.set(agent.id, {
+        agent,
+        turn,
+        from: { route: provider, model },
+        to: { route: provider, model },
+        clearedEffort: true,
+        reason: REASON.EFFORT,
+        detail: '',
+      })
+    }
     return { ok: true, to: null }
+  }
+
+  /**
+   * The text of the continuation turn a repair owes.
+   *
+   * It says what broke and where the session moved, then asks for verification
+   * instead of resumption. That second half is not politeness: the turn died between
+   * a tool call and its result, so "carry on" alone invites repeating a side effect
+   * whose first attempt may have landed. The honest request is "look, then continue".
+   *
+   * @param {object} plan - the pending repair.
+   * @returns {string} model-facing instruction.
+   */
+  function continuationText(plan) {
+    const from = `${plan.from.route}/${plan.from.model}`
+    const to = `${plan.to.route}/${plan.to.model}`
+    const why = plan.reason === REASON.EFFORT
+      ? 'the model was asked for a reasoning level it does not declare'
+      : `the request failed upstream (${plan.reason}${plan.detail ? `: ${String(plan.detail).slice(0, 200)}` : ''})`
+    const moved = plan.clearedEffort && from === to
+      ? `The session stays on ${to}, and its reasoning level has been reset to the adapter default.`
+      : `The session has already been moved to ${to}, and this turn is that continuation.`
+    return [
+      `The previous reply was interrupted: ${from} — ${why}.`,
+      moved,
+      'Before you continue, check the actual state: read the files you touched, the tasks you opened, and the output of any command whose result never reached you. Do not assume the interrupted step finished, and do not assume it never started.',
+      "Then finish the user's original request from the first point you can verify. Do not repeat an action whose effect you cannot confirm — check whether it already happened.",
+      "Answer in the user's language.",
+    ].join('\n\n')
+  }
+
+  /**
+   * Build the continuation as a user-role message that names its own origin.
+   *
+   * The source is not `user`: a person did not type this, and a transcript that says
+   * otherwise is a lie the next reader has no way to catch. The harness keeps that
+   * distinction visible — a non-`user` source renders as a trigger notice that names
+   * its kind rather than as a message from the person.
+   *
+   * @param {object} plan - the pending repair.
+   * @returns {object} a frozen-free user message for `agent.followup`.
+   */
+  function continuationMessage(plan) {
+    return {
+      id: randomUUID(),
+      role: 'user',
+      content: [{ type: 'text', text: continuationText(plan) }],
+      source: {
+        kind: 'llm-manage-repair',
+        from: `${plan.from.route}/${plan.from.model}`,
+        to: `${plan.to.route}/${plan.to.model}`,
+        reason: plan.reason,
+        clearedEffort: plan.clearedEffort === true,
+      },
+    }
+  }
+
+  /**
+   * Queue the continuation turn a repair owes, waiting briefly for the agent.
+   *
+   * `agent/followup` queues a turn and wakes the driver, so the item is claimed the
+   * same way a human message is — which is also what lets the pending selection land:
+   * the claim happens before the new step reads `model.current()`.
+   *
+   * Refusals are reported rather than retried blindly. A queued message means the
+   * person already spoke and the new model will answer THAT, so a second prompt would
+   * be a duplicate request wearing a helper's name.
+   *
+   * @param {object} plan - the pending repair, with its `agent`.
+   * @returns {Promise<{ ok: true } | { ok: false, why: string }>} whether a turn was queued.
+   */
+  async function continueRepair(plan) {
+    const agent = plan?.agent
+    if (agent === undefined || typeof agent.followup !== 'function') {
+      return { ok: false, why: 'the session is no longer loaded' }
+    }
+    if (noAutoSwitch.has(agent.id)) {
+      return { ok: false, why: 'automatic recovery is off for this session' }
+    }
+    const spent = continuations.get(agent.id) ?? 0
+    if (spent >= MAX_CONTINUATIONS_PER_REQUEST) {
+      return { ok: false, why: `already continued ${spent} time(s) for this request` }
+    }
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const pending = (agent.inbox?.nextStep?.length ?? 0) + (agent.inbox?.nextTurn?.length ?? 0)
+      if (pending > 0) {
+        return { ok: false, why: 'a message is already waiting; the new model will answer it' }
+      }
+      if (agent.status === 'idle') {
+        try {
+          agent.followup(continuationMessage(plan))
+        } catch (error) {
+          return { ok: false, why: error instanceof Error ? error.message : String(error) }
+        }
+        continuations.set(agent.id, spent + 1)
+        diagnostics.continuations += 1
+        return { ok: true }
+      }
+      // The turn is still closing. Fifty milliseconds is long enough for the loop to
+      // park and short enough that a person never sees the gap.
+      await new Promise((resolve) => { setTimeout(resolve, 50) })
+    }
+    return { ok: false, why: 'the session never became idle enough to continue' }
   }
 
   // ── Recovery: capture each request's model, then move it on quota failure ──
@@ -2422,23 +2623,42 @@ export function apply(ctx, rawConfig) {
         // that was just refused. The repair belongs to the next message.
         return undefined
       }
+      // A request the model rejected on its shape is never a model problem, and the
+      // platform's own retry policy is the only thing that should look at it.
+      if (verdict.reason === REASON.SHAPE) {
+        diagnostics.refusals.push({ at: Date.now(), why: `the request itself is malformed (${verdict.detail.slice(0, 120)})` })
+        return next()
+      }
       // Only a model-scoped, switchable failure is ours; everything else keeps
       // the stock behaviour, including the retry policy for real rate limits.
       if (!verdict.switchable) return next()
+      // Transient failures belong to the platform first. Its retry policy already owns
+      // backoff and an attempt budget, so asking it before spending a fallback is how a
+      // five-second blip stops costing someone their model. Only a refusal means the
+      // attempts are exhausted and the model itself is now implicated.
+      let delegated
+      if ((await effectiveRecovery()).retryFirst && verdict.reason === REASON.ERROR) {
+        delegated = await next()
+        if (delegated?.kind === 'retry') return delegated
+      }
+      // `next()` is a waterfall turn: running it twice would run the retry policy twice,
+      // so the answer just obtained is reused instead of asked again.
+      const keepStock = () => (delegated === undefined ? next() : Promise.resolve(delegated))
       let outcome
       try {
         outcome = await switchModel(payload)
       } catch (error) {
         diagnostics.refusals.push({ at: Date.now(), why: error instanceof Error ? error.message : String(error) })
-        return next()
+        return keepStock()
       }
       if (!outcome.ok) {
         diagnostics.refusals.push({ at: Date.now(), why: outcome.why })
-        return next()
+        return keepStock()
       }
       // Not a retry: the step's selection is frozen, so retrying asks the model that
       // just failed again and only delays the real error. The switch is committed to
-      // the Session and takes effect from the next message.
+      // the Session, and the continuation queued at the turn boundary is what actually
+      // resumes the work — one turn later, on the model that can answer.
       return undefined
     })
 
@@ -2447,7 +2667,10 @@ export function apply(ctx, rawConfig) {
     // a selection change is still legal for the step about to run. A repair that landed
     // needs nothing here; this only finishes one that did not, and never overrules a
     // model the user picked in the meantime.
-    scope.on('agent/inbox/claimed', ({ agent }) => {
+    scope.on('agent/inbox/claimed', ({ agent, message }) => {
+      // The continuation budget is per request, not per session: someone who speaks
+      // again is asking a new question and deserves a fresh recovery attempt.
+      if (message?.source?.kind === 'user') continuations.delete(agent.id)
       const repair = pendingRepair.get(agent.id)
       if (repair === undefined) return
       const model = agent.model
@@ -2507,28 +2730,64 @@ export function apply(ctx, rawConfig) {
     const sessionId = cleanString(session?.id)
     if (sessionId === undefined) return
     const pending = pendingSwitch.get(sessionId)
-    if (pending === undefined) return
+    const owed = wantContinue.get(sessionId)
+    // A level repair owes a continuation without ever being a model switch, so this
+    // listener cannot be gated on the switch record alone — that gate is exactly why a
+    // repaired level still waited for the person to type.
+    if (pending === undefined && owed === undefined) return
+
+    if (event?.type === 'assistant/message' && pending === undefined) {
+      // The session produced a message on its own: nothing is interrupted, so the debt
+      // is void. Without this, a repair that was overtaken by a later turn would queue a
+      // continuation for work that had already resumed.
+      wantContinue.delete(sessionId)
+      return
+    }
 
     if (event?.type === 'turn/end') {
-      // The turn ended without a committed message for this switch: it did not
-      // recover. Report the truth — the target was never reached — and stop
-      // carrying the decision.
+      // The turn ended without a committed message for this switch: the run did not
+      // recover. Report the truth — the target was never reached — and, if a repair is
+      // still owed a continuation, queue it before the person is asked to do it.
       pendingSwitch.delete(sessionId)
-      const report = {
-        at: Date.now(),
-        from: pending.from,
-        to: pending.to,
-        reason: pending.reason,
-        detail: pending.detail,
-        outcome: 'unreached',
-        sessionSwitched: pending.sessionSwitched,
-        ran: null,
+      wantContinue.delete(sessionId)
+      const plan = owed
+      const record = pending ?? {
+        from: owed.from,
+        to: owed.to,
+        reason: owed.reason,
+        detail: owed.detail,
+        sessionSwitched: false,
       }
-      diagnostics.bySession[sessionId] = report
-      // Kept beyond this session: the banner answers "what happened in this turn",
-      // the history answers "which model keeps doing this", and only the second can
-      // decide that a model does not belong in a fallback chain.
-      recordFailover({ sessionId, ...report })
+      const write = (continued) => {
+        const report = {
+          at: Date.now(),
+          from: record.from,
+          to: record.to,
+          reason: record.reason,
+          detail: record.detail,
+          outcome: 'unreached',
+          sessionSwitched: record.sessionSwitched,
+          ran: null,
+          // A queued continuation is a fact, not a hope: `followup` either accepted the
+          // turn or refused it, and both belong in the record the user can read back.
+          continued: continued.ok === true,
+          ...(plan === undefined || continued.ok === true ? {} : { continueRefused: continued.why }),
+        }
+        diagnostics.bySession[sessionId] = report
+        // Kept beyond this session: the banner answers "what happened in this turn",
+        // the history answers "which model keeps doing this", and only the second can
+        // decide that a model does not belong in a fallback chain.
+        recordFailover({ sessionId, ...report })
+      }
+      if (plan === undefined) {
+        write({ ok: false, why: 'no repair was waiting for the next message' })
+        return
+      }
+      // Not awaited: this listener must not hold the turn boundary open. The record is
+      // written when the queue attempt settles, which is milliseconds at worst.
+      continueRepair(plan).then(write, (error) => {
+        write({ ok: false, why: error instanceof Error ? error.message : String(error) })
+      })
       return
     }
     if (event?.type !== 'assistant/message') return
@@ -2992,6 +3251,24 @@ export function apply(ctx, rawConfig) {
                 fallback: { ...(overlay.fallback ?? {}), ...next },
               }))
               return json({ ok: true, value: await effectiveFallback(), snapshot: await snapshot() })
+            }
+            // The recovery policy is the same kind of preference as the chain, and it
+            // is written the same way: no profile file is edited, and the change is
+            // visible to the next failure instead of the next restart.
+            case 'recoveryConfig':
+              return json({ ok: true, value: await effectiveRecovery() })
+            case 'setRecovery': {
+              const next = {}
+              if (typeof body?.retryFirst === 'boolean') next.retryFirst = body.retryFirst
+              if (typeof body?.autoContinue === 'boolean') next.autoContinue = body.autoContinue
+              if (next.retryFirst === undefined && next.autoContinue === undefined) {
+                return json({ ok: false, error: 'setRecovery needs retryFirst or autoContinue' }, 400)
+              }
+              await store.update(CONFIG_DOC, overlay => ({
+                ...overlay,
+                recovery: { ...(overlay.recovery ?? {}), ...next },
+              }))
+              return json({ ok: true, value: await effectiveRecovery(), snapshot: await snapshot() })
             }
             case 'probeRecords': {
               const overlay = await store.read(PROBE_DOC)

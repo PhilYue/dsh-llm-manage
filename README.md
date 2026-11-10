@@ -104,6 +104,7 @@ The rule is **scope**, not severity:
 | per-model quota exhausted | one model | yes | yes |
 | other per-model failures | one model | yes | yes |
 | no adapter registered for this route | the whole route | yes | **no** |
+| malformed request / context too long | the request itself | **never** | no |
 | account-wide rate limit | the whole API key | **never** | no |
 | account-wide quota | the whole API key | **never** | no |
 
@@ -114,9 +115,9 @@ would only hide the real problem and burn another request.
 A switch cannot rescue the turn that just failed. DSH freezes the provider, model and
 reasoning effort at step preparation, re-validates them when the request is built, and
 replays the same frozen selection on a retry — so the plugin commits the switch with
-`agent.model.select()`, the one path the SDK documents, and the **next** message runs on
-the new model. The failed turn reports its real error instead of a request-time mismatch.
-If the Session still holds the broken selection when the next message is claimed — a
+`agent.model.select()`, the one path the SDK documents, and the work continues on the new
+model (see below). The failed turn reports its real error instead of a request-time
+mismatch. If the Session still holds the broken selection when the next turn is claimed — a
 refused controller call, or a level the session did not drop — the repair is finished
 there, synchronously, before the step reads its selection.
 
@@ -151,6 +152,47 @@ Concretely, with `model-gamma` selected and its quota exhausted:
 At most three automatic switches happen per turn, and if the chain finds nothing usable the
 failure is passed through untouched rather than retried in a way that cannot succeed.
 
+### Picking the work back up
+
+Switching the model is only half the job: the turn that failed is gone, and until now this
+plugin stopped there and told you to send the next message yourself. That is the wrong
+place for the work — you asked the question to get an answer, not to learn which model
+answered it.
+
+So when a switch is committed for a failure that interrupted work, the plugin queues the
+next turn itself, with `agent.followup()` — the SDK's own path for "make this the sole
+ordinary message of its own turn". The queued message does not pretend to be you: its
+source is `llm-manage-repair`, and it says what happened and what to do about it. It asks
+the new model to **check the actual state first** — the files it wrote, the task list it
+updated, the command output it was reading — and only then continue, without repeating
+work that already landed. A turn that died mid-tool-call may have finished its side
+effects; continuing as if it had not is how a recovery turns into a mess.
+
+What that buys, and what it does not:
+
+- The queue is only filled at the turn boundary (`turn/end`), after the switch is a fact.
+- If a message is already waiting — you typed while it was recovering — the plugin does not
+  add another; yours gets answered on the new model, which is what you wanted anyway.
+- At most **two** continuations per request. A model that fails, is replaced, and fails
+  again is a fact about the route, not about the turn; three identical attempts is not
+  resilience, it is a loop. Typing a new message resets the budget, because that is a new
+  request.
+- If it declines to continue it says so, in the same place it used to say "next message
+  only" — the banner names the reason instead of leaving you to guess.
+- Ordering is deliberate: an ordinary transient failure goes to the harness's own retry
+  policy first (it is bounded, it knows the backoff), and only a failure that survives it
+  is treated as a model problem worth moving. A request that is malformed, too large for
+  the context, or wrong in shape is never a model problem and never switches — that just
+  spends another model's quota on the same invalid request.
+
+Both halves are exposed where the rest of the policy lives: **Model manager → Failover →
+Automatic handling**, two switches with their trade-off written underneath. They write the
+moment they move (a switch that only took effect after pressing a Save button somewhere
+else would be lying about what the plugin is doing), and they are stored in the plugin's
+own config document — the same one the fallback chain uses, so `cordis.patch.yml` is never
+edited behind your back. The Loader row still works as the default: `recovery.retryFirst`
+and `recovery.autoContinue`, both on, and the UI switch simply overrides it.
+
 ### The switch happens, and the banner proves it
 
 Two mechanisms move a model, and the difference matters:
@@ -171,7 +213,8 @@ names the model that actually produced the response:
 
 | What the answering model was | What the banner says |
 |---|---|
-| the model we switched to | *Model switched*, with **Switch back** |
+| the model we switched to, work queued again | *Model switched and the work was picked back up* |
+| the model we switched to, nothing queued | *Model switched*, with **Switch back** |
 | a different model | *Switch did not take effect*, naming the model that actually ran |
 | no message — the turn ended | *Switch attempted, turn not recovered* |
 
@@ -182,11 +225,11 @@ were not about quota at all. Each reason now has its own wording, and the provid
 message is one clamped line with the full text on hover — inlined in full it was up to 400
 characters, which made the banner taller than the conversation around it.
 
-The banner carries the way forward, not just the news. **Continue** appears once a switch
-was confirmed: the platform froze the model for the step that already failed, so the only
-continuation is the next message — and that message stays yours. The button fills an
-editable prompt ("continue from where the previous answer stopped") into the draft and
-persists it; it never sends on your behalf. **Switch back** is offered under the same
+The banner carries the way forward, not just the news. When the plugin could not pick the
+work back up itself — automatic recovery is off, the budget is spent, or a message was
+already waiting — **Continue** appears instead: it fills an editable prompt ("continue from
+where the previous answer stopped") into the draft and persists it, so the decision to
+resend stays yours. It never sends on your behalf. **Switch back** is offered under the same
 condition, since it moves the session's model back. **Stop switching** suppresses automatic
 switching for that session until the harness restarts. **Dismiss** hides the report for
 that switch only.

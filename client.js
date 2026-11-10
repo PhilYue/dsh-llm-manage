@@ -282,6 +282,16 @@ window.__ModuleLoader__.load({
         fallbackRevert: 'Switch back',
         fallbackContinue: 'Continue',
         fallbackContinueFilled: 'Filled into the draft — edit it or send it',
+        fallbackTitleContinued: 'Model switched and the work was picked back up',
+        fallbackTitleEffort: 'Reasoning level repaired and the work was picked back up',
+        switchesContinued: 'continued',
+        switchesNotContinued: 'not continued',
+    policyTitle: 'Automatic handling',
+    policyRetry: 'Retry a transient failure before moving',
+    policyRetryNote: 'A single 5xx is not a broken model; the harness retries those with its own backoff.',
+    policyContinue: 'Pick the work back up after a switch',
+    policyContinueNote: 'Queues one new turn, telling it to check the actual state first. At most twice per request.',
+    policySaved: 'Saved',
         continuePrompt: 'Continue from where the previous answer stopped.',
         fallbackSuppress: 'Stop switching',
         fallbackSuppressed: 'Automatic switching off',
@@ -534,6 +544,16 @@ window.__ModuleLoader__.load({
         fallbackRevert: '改回',
         fallbackContinue: '接续',
         fallbackContinueFilled: '已填入草稿，可编辑后发送',
+        fallbackTitleContinued: '已自动切换并继续执行',
+        fallbackTitleEffort: '已修正推理档位并继续执行',
+        switchesContinued: '已继续',
+        switchesNotContinued: '未继续',
+    policyTitle: '自动处理',
+    policyRetry: '瞬时失败先重试，再考虑换模型',
+    policyRetryNote: '一次 5xx 不代表模型坏了，平台会按自己的退避重试。',
+    policyContinue: '换模型后自动继续执行',
+    policyContinueNote: '会排一轮新消息，要求先核对实际状态再继续；每个请求最多两次。',
+    policySaved: '已保存',
         continuePrompt: '请从中断处继续上一条回答。',
         fallbackSuppress: '不再自动切换',
         fallbackSuppressed: '已关闭自动切换',
@@ -1089,6 +1109,8 @@ window.__ModuleLoader__.load({
    timestamp off the row. */
 .llmm-sw-session{flex:none;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0;border:0;background:none;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11px;cursor:pointer;text-decoration:underline;text-decoration-color:var(--dsw-alias-border-l3);text-underline-offset:2px}
 .llmm-sw-session-flat{cursor:default;text-decoration:none;color:var(--dsw-alias-label-tertiary)}
+.llmm-sw-continued{flex:none;color:var(--dsw-alias-label-tertiary)}
+.llmm-sw-continued.llmm-sw-ok{color:var(--dsw-alias-state-success-primary)}
 .llmm-sw-session:hover{color:var(--dsw-alias-label-primary);text-decoration-color:currentColor}
 .llmm-sw-session:focus-visible{outline:none;color:var(--dsw-alias-label-primary);text-decoration-color:currentColor}
 .llmm-mg-detail{padding:2px 0 10px 20px}
@@ -1121,6 +1143,13 @@ window.__ModuleLoader__.load({
 .llmm-fb-opt-route{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .llmm-fb-opt-flag{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .llmm-fb-opt-bad .llmm-fb-opt-flag{color:var(--dsw-alias-state-error-primary)}
+.llmm-policy{display:flex;flex-direction:column;gap:2px;margin:0 0 10px;padding:8px 0 0;border-top:0.5px solid var(--dsw-alias-border-l3)}
+.llmm-policy-head{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);padding-bottom:2px}
+.llmm-policy-row{display:flex;align-items:flex-start;gap:9px;padding:5px 0}
+.llmm-policy-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.llmm-policy-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary)}
+.llmm-policy-note{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+.llmm-policy-row .llmm-switch{margin-top:2px;flex:none}
 .llmm-fb-notes{margin:0;padding:0 0 10px 16px}
 .llmm-fb-notes li{font-size:11px;line-height:18px;color:var(--dsw-alias-label-tertiary)}
 .llmm-fb-check{display:flex;flex-direction:column;gap:6px;padding-bottom:10px}
@@ -3126,8 +3155,17 @@ window.__ModuleLoader__.load({
       // Which of the three things actually happened, in the user's terms.
       const outcome = note.outcome === 'reached' ? 'reached'
         : note.outcome === 'unreached' ? 'unreached' : 'elsewhere'
-      const title = t(outcome === 'reached' ? 'fallbackTitleReached'
-        : outcome === 'unreached' ? 'fallbackTitleUnreached' : 'fallbackTitleElsewhere')
+      // Did the repair pick the work back up? That is a different fact from "the model
+      // was switched": one means the run was rescued, the other means the person still
+      // has to restart it, and conflating them is what made this banner read as a
+      // half-finished feature.
+      const continued = note.continued === true
+      const levelRepair = note.reason === 'effort'
+        && note.from?.model === note.to?.model
+      const title = continued
+        ? t(levelRepair ? 'fallbackTitleEffort' : 'fallbackTitleContinued')
+        : t(outcome === 'reached' ? 'fallbackTitleReached'
+          : outcome === 'unreached' ? 'fallbackTitleUnreached' : 'fallbackTitleElsewhere')
       const reasonKey = `fallbackReason${note.reason === 'quota' ? 'Quota'
         : note.reason === 'retired' ? 'Retired'
           : note.reason === 'protocol' ? 'Protocol'
@@ -3138,7 +3176,11 @@ window.__ModuleLoader__.load({
       // model for the step that already started — so the only continuation is the
       // next message. That message should stay the user's: this fills an editable
       // prompt instead of sending text they never wrote.
+      // A continuation that already happened makes this button a lie: the turn is
+      // queued, and handing over a draft would ask the person to send the same request
+      // twice.
       const continuable = outcome === 'reached'
+        && continued !== true
         && props?.inputActions !== undefined
         && typeof props.inputActions.setDraft === 'function'
       const continueTurn = () => {
@@ -3153,7 +3195,7 @@ window.__ModuleLoader__.load({
       return h(React.Fragment, null,
         h(Style),
         h('div', { className: 'llmm-root llmm-banner', role: 'status' },
-          h('span', { className: 'llmm-banner-mark', 'aria-hidden': true }, outcome === 'reached' ? '⇄' : '⚠'),
+          h('span', { className: 'llmm-banner-mark', 'aria-hidden': true }, continued || outcome === 'reached' ? '⇄' : '⚠'),
           h('div', { className: 'llmm-banner-body' },
             h('div', { className: 'llmm-banner-line' },
               h('b', null, title),
@@ -3165,8 +3207,15 @@ window.__ModuleLoader__.load({
             filled
               ? h('div', { className: 'llmm-banner-cont' }, t('fallbackContinueFilled'))
               : null,
-            h('div', { className: 'llmm-banner-why', title: note.detail ?? '' },
-              outcome === 'reached'
+            h('div', {
+              className: 'llmm-banner-why',
+              // The raw provider text stays available on hover; the refusal reason is
+              // appended there too, so the banner can say "not continued" without
+              // spending a line on internal wording.
+              title: [note.detail ?? '', continued || !note.continueRefused ? '' : note.continueRefused]
+                .filter(part => part !== '').join(' · '),
+            },
+              outcome === 'reached' || continued
                 ? reason
                 : `${reason}${ran !== '' ? ` · ${t('fallbackRanOn')} ${ran}` : ''}`,
             ),
@@ -3376,6 +3425,33 @@ window.__ModuleLoader__.load({
        * point of the button: the cached answer is exactly the one the user
        * already has on screen.
        */
+      // The recovery policy is a preference with an immediate effect on the next
+      // failure, so it is written when the switch moves and not saved with the draft:
+      // a switch that looks on and does nothing until you press a button elsewhere is
+      // the kind of lie a settings row should never tell.
+      const recovery = snap !== null && snap !== undefined
+        && snap.recovery !== null && typeof snap.recovery === 'object'
+        ? snap.recovery
+        : { retryFirst: true, autoContinue: true }
+      const setPolicy = async (key) => {
+        if (busy !== '') return
+        setBusy('policy')
+        setError('')
+        setNote('')
+        try {
+          const data = await callHost({ action: 'setRecovery', [key]: recovery[key] !== true })
+          if (data === undefined || data.value === undefined) return
+          setNote(t('policySaved'))
+          const fresh = await callHost({ action: 'snapshot' })
+          if (fresh !== undefined && fresh.value !== undefined) setSnap(fresh.value)
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(failure instanceof Error ? failure.message : String(failure))
+        } finally {
+          setBusy('')
+        }
+      }
+
       const pull = async () => {
         setBusy('pull')
         setNote('')
@@ -3891,7 +3967,25 @@ window.__ModuleLoader__.load({
               }, t('removedRestore'))))),
       )
 
+      const policyRow = (key, label, note) => h('div', { className: 'llmm-policy-row', key },
+        h('div', { className: 'llmm-policy-text' },
+          h('span', { className: 'llmm-policy-label' }, t(label)),
+          h('span', { className: 'llmm-policy-note' }, t(note))),
+        h('button', {
+          type: 'button',
+          role: 'switch',
+          'aria-checked': recovery[key] === true,
+          'aria-label': t(label),
+          className: `llmm-switch${recovery[key] === true ? ' llmm-switch-on' : ''}`,
+          disabled: busy !== '',
+          onClick: () => setPolicy(key),
+        }, h('span', { className: 'llmm-switch-knob', 'aria-hidden': 'true' })))
+
       const failoverView = h(React.Fragment, null,
+        h('section', { className: 'llmm-policy', 'aria-label': t('policyTitle') },
+          h('div', { className: 'llmm-policy-head' }, t('policyTitle')),
+          policyRow('retryFirst', 'policyRetry', 'policyRetryNote'),
+          policyRow('autoContinue', 'policyContinue', 'policyContinueNote')),
         h('label', { className: 'llmm-fb-toggle' },
           h('input', {
             type: 'checkbox',
@@ -4070,6 +4164,15 @@ window.__ModuleLoader__.load({
                     className: 'llmm-sw-session llmm-sw-session-flat',
                     title: record.sessionId,
                   }, sessionLabel(record.sessionId)),
+              // Whether the work was picked back up separates a repair that rescued the
+              // run from one that only moved it: the counts above cannot tell these
+              // apart, and it is the difference the person actually feels.
+              typeof record.continued !== 'boolean'
+                ? null
+                : h('span', {
+                  className: `llmm-sw-sub llmm-sw-continued${record.continued === true ? ' llmm-sw-ok' : ''}`,
+                  title: typeof record.continueRefused === 'string' ? record.continueRefused : '',
+                }, t(record.continued === true ? 'switchesContinued' : 'switchesNotContinued')),
               h('span', { className: 'llmm-mg-when' }, record.at > 0 ? ageOf(record.at) : ''),
             )))),
         h('div', { className: 'llmm-sw-note' }, t('switchesNote')),

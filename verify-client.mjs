@@ -56,9 +56,11 @@ process.env.DSH_HOME = HOME
   const now = Date.now()
   writeFileSync(join(dir, '__failover__.json'), JSON.stringify({
     records: [
-      { at: now - 3000, sessionId: 'sess-seed-a', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'unreached' },
-      { at: now - 2000, sessionId: 'sess-seed-b', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'reached' },
-      { at: now - 1000, sessionId: 'sess-seed-c', from: { route: 'seed-gateway', model: 'seeded-other' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'error', detail: '', outcome: 'ran-elsewhere' },
+      // The continuation outcome is part of the record now, so one seeded row states
+      // each answer: picked back up, never picked up, and a level repair that did.
+      { at: now - 3000, sessionId: 'sess-seed-a', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'unreached', continued: true },
+      { at: now - 2000, sessionId: 'sess-seed-b', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'reached', continued: false, continueRefused: 'already continued 2 time(s) for this request' },
+      { at: now - 1000, sessionId: 'sess-seed-c', from: { route: 'seed-gateway', model: 'seeded-other' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'error', detail: '', outcome: 'ran-elsewhere', continued: true },
     ],
   }), 'utf8')
 }
@@ -1255,6 +1257,39 @@ check('a hidden row can be unhidden from the menu that hid it',
     /切换未生效|did not take effect/i.test(bannerText())
     && /本轮实际使用|actually ran on/i.test(bannerText()),
     bannerText().slice(0, 140))
+
+  // A repair that queued the continuation is a different outcome from one that only
+  // moved the session: the first finishes the work, the second still needs the person.
+  await renderBanner({
+    at: Date.now(), from: { route: ROUTE, model: at(0) },
+    to: { route: SECOND_ROUTE, model: at(1) }, reason: 'quota', detail: 'quota exhausted',
+    outcome: 'unreached', ran: null, sessionSwitched: true, continued: true,
+  })
+  check('a repair that queued the continuation says the work was picked back up',
+    /继续执行|picked back up/i.test(bannerText()), bannerText().slice(0, 140))
+  check('a continuation already queued does not offer to queue it again',
+    buttonNamed(/接续|^Continue$/i) === undefined,
+    bannerButtons().map(node => node.textContent).join(' | '))
+
+  await renderBanner({
+    at: Date.now(), from: { route: ROUTE, model: at(0) },
+    to: { route: ROUTE, model: at(0) }, reason: 'effort', detail: '',
+    outcome: 'unreached', ran: null, sessionSwitched: false, continued: true,
+  })
+  check('a level repair reads as a level repair, not as a model switch',
+    /档位|reasoning level/i.test(bannerText()), bannerText().slice(0, 140))
+
+  await renderBanner({
+    at: Date.now(), from: { route: ROUTE, model: at(0) },
+    to: { route: SECOND_ROUTE, model: at(1) }, reason: 'quota', detail: 'quota exhausted',
+    outcome: 'unreached', ran: null, sessionSwitched: true, continued: false,
+    continueRefused: 'a message is already waiting; the new model will answer it',
+  })
+  check('a refused continuation still reports the switch as applying to the next message',
+    /下一条消息生效|next message/i.test(bannerText()), bannerText().slice(0, 140))
+  check('the refusal reason is kept on hover rather than inlined',
+    /already waiting/.test(bannerHost.querySelector('.llmm-banner-why')?.getAttribute('title') ?? ''),
+    bannerHost.querySelector('.llmm-banner-why')?.getAttribute('title') ?? 'no title')
 
   await act(async () => { bannerRoot.unmount() })
   bannerHost.remove()
@@ -2893,6 +2928,50 @@ if (managerSlot !== undefined) {
     await waitFor(() => mgContainer.querySelector('.llmm-fb-toggle') !== null)
   })
   check('the failover tab exposes the enable switch', mgContainer.querySelector('.llmm-fb-toggle input') !== null)
+
+  // ── the recovery policy lives beside the chain ──
+  // It is a preference with an immediate effect, so the switch has to (a) show what
+  // the Host is actually doing and (b) write when it moves, not when the draft saves.
+  const policySwitches = () => [...mgContainer.querySelectorAll('.llmm-policy .llmm-switch')]
+  check('the failover tab shows both recovery switches',
+    policySwitches().length === 2
+      && policySwitches().every(node => node.getAttribute('role') === 'switch' && node.getAttribute('aria-label') !== ''),
+    `${policySwitches().length} switch(es)`)
+  check('a recovery switch starts on what the Host reports',
+    policySwitches()[1]?.getAttribute('aria-checked') === String((await snapNow()).recovery.autoContinue),
+    `aria=${policySwitches()[1]?.getAttribute('aria-checked')}`)
+  const policies = []
+  const realFetchPolicy = globalThis.fetch
+  globalThis.fetch = async (request, init) => {
+    try {
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      if (body.action === 'setRecovery') policies.push(body)
+    } catch { /* not ours */ }
+    return realFetchPolicy(request, init)
+  }
+  try {
+    await act(async () => {
+      policySwitches()[1]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => policies.length > 0)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+  } finally {
+    globalThis.fetch = realFetchPolicy
+  }
+  check('moving a recovery switch writes it immediately',
+    policies.length === 1 && policies[0].autoContinue === false,
+    JSON.stringify(policies))
+  check('the switch then reports the new state',
+    policySwitches()[1]?.getAttribute('aria-checked') === 'false'
+      && (await snapNow()).recovery.autoContinue === false,
+    `aria=${policySwitches()[1]?.getAttribute('aria-checked')} host=${(await snapNow()).recovery.autoContinue}`)
+  check('a saved recovery switch is reported as saved',
+    mgContainer.querySelector('.llmm-dlg-note')?.textContent !== '',
+    mgContainer.querySelector('.llmm-dlg-note')?.textContent ?? '')
+  await act(async () => {
+    policySwitches()[1]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => policySwitches()[1]?.getAttribute('aria-checked') === 'true')
+  })
   const candidate = `${ROUTE}/${MODELS[1]}`
   await act(async () => {
     mgContainer.querySelector('.llmm-fb-pick')?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
@@ -2998,6 +3077,20 @@ if (managerSlot !== undefined) {
   check('the tab says what it records and why it can be cleared',
     /只记录已经证实的切换|Only proven switches/.test(mgContainer.querySelector('.llmm-sw-note')?.textContent ?? ''),
     mgContainer.querySelector('.llmm-sw-note')?.textContent ?? 'no note')
+  // Whether the work was picked back up cannot be read off the counts above: a switch
+  // that moved the session and one that rescued the run look identical there. The row
+  // states it, because it is the difference the person feels.
+  const continuedChips = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-event .llmm-sw-continued'))
+  check('every recorded switch states whether the work was continued',
+    continuedChips().length === 3, `${continuedChips().length} chip(s) of 3 event(s)`)
+  check('a continued repair is marked as recovered, a refused one as not',
+    /已继续|continued/i.test(continuedChips()[0]?.textContent ?? '')
+      && !/未继续|not continued/i.test(continuedChips()[0]?.textContent ?? '')
+      && /未继续|not continued/i.test(continuedChips()[1]?.textContent ?? ''),
+    continuedChips().map(node => node.textContent).join(' | '))
+  check('the refusal reason is kept on the chip instead of spent on a line',
+    /already continued/.test(continuedChips()[1]?.getAttribute('title') ?? ''),
+    continuedChips()[1]?.getAttribute('title') ?? 'no title')
   // A switch happened inside a Session, and the row is the only place a reader can go
   // and look at it: the label comes from the shipped projection (the log stores the id
   // it saw, not a name that may since have been renamed).
