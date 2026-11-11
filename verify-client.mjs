@@ -1789,6 +1789,64 @@ await act(async () => {
   await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
 }
 
+// ── the default-model line names its reason and its conversation ─────────────
+// This line exists because a broken default fails the first message of every new
+// conversation. It used to say "cannot be called" whatever the cause — the real case
+// on this machine was a free model whose quota had run out, which sent the reader
+// looking for a network fault — and it appeared identically in conversations that had
+// picked their own model, reading as a fault report for the wrong chat. Both halves
+// now come from the Host's answer, so both are asserted here.
+{
+  const originalFetch = globalThis.fetch
+  const savedCurrent = dirSnapshot.current
+  let answer = null
+  globalThis.fetch = async (url, init) => {
+    const body = typeof init?.body === 'string' ? init.body : ''
+    if (String(url).includes('llm-manage') && body.includes('"action":"defaultModel"')) {
+      return new Response(JSON.stringify({ ok: true, value: answer }),
+        { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    return originalFetch(url, init)
+  }
+  const renderWith = async (current, nextAnswer) => {
+    answer = nextAnswer
+    dirSnapshot.current = current
+    // `snap` is read once per mount and the default row arrives from a fetch on open,
+    // so a reopen of the same instance would keep the previous answer.
+    await act(async () => { pickerRoot.render(null) })
+    await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+    await act(async () => {
+      const trigger = pickerContainer.querySelector('.llmm-trigger')
+      if (trigger === null) throw new Error('the picker rendered no trigger')
+      trigger.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerMenuQuery('.llmm-default-warn') !== null)
+    })
+  }
+  const warning = {
+    known: true, route: ROUTE, model: 'seeded-default', listed: true, removed: false,
+    status: 'quota', detail: 'Free usage limit reached.', unusable: true,
+    suggestion: { route: ROUTE, model: at(3) },
+  }
+
+  await renderWith({ provider: ROUTE, model: at(0) }, warning)
+  const elsewhere = pickerMenuQuery('.llmm-default-warn-text')?.textContent ?? ''
+  check('the default-model warning states why it cannot be used',
+    /额度已用尽|quota exhausted/.test(elsewhere), elsewhere || 'no warning')
+  check('a model this conversation does not use is reported as someone else\'s problem',
+    pickerMenuQuery('.llmm-default-warn-scope') !== null, elsewhere || 'no warning')
+
+  await renderWith({ provider: ROUTE, model: 'seeded-default' }, warning)
+  const here = pickerMenuQuery('.llmm-default-warn-text')?.textContent ?? ''
+  check('the same warning is not scoped away when this conversation is the one on it',
+    /额度已用尽|quota exhausted/.test(here) && pickerMenuQuery('.llmm-default-warn-scope') === null,
+    here || 'no warning')
+
+  dirSnapshot.current = savedCurrent
+  globalThis.fetch = originalFetch
+  await act(async () => { pickerRoot.render(null) })
+  await act(async () => { pickerRoot.render(React.createElement(pickerSlot.Component, pickerInjected)) })
+}
+
 // ── a measured level becomes a declared one from the row itself ─────────────
 // The measurement is only useful if it can be acted on: the harness validates a level
 // against the model's DECLARATION, so a model the probe measured but nobody declared

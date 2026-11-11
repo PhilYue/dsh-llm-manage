@@ -293,7 +293,11 @@ window.__ModuleLoader__.load({
         fallbackReasonUnauthorized: 'this account is not authorized for the model',
         fallbackReasonNetwork: 'the route could not be reached',
         bannerHandedOver: 'handed over to {model}',
-        defaultModelWarn: 'New conversations start on {model}, which cannot be called.',
+        // The reason is the whole value of this line: "cannot be called" sent people
+        // looking for a network problem when the account had simply run out of free
+        // usage. It comes from the same status vocabulary as every other row.
+        defaultModelWarn: 'New conversations start on {model} — {why}.',
+        defaultModelScope: 'This conversation keeps its own model.',
         defaultModelFix: 'Start them on {model}',
         defaultModelFixed: 'The default model was updated.',
     policyTitle: 'Automatic handling',
@@ -572,7 +576,8 @@ window.__ModuleLoader__.load({
         fallbackReasonUnauthorized: '这个账号没有该模型的权限',
         fallbackReasonNetwork: '路由连不上',
         bannerHandedOver: '已由 {model} 接管',
-        defaultModelWarn: '新会话默认使用 {model}，但当前调不通。',
+        defaultModelWarn: '新会话默认使用 {model}：{why}。',
+        defaultModelScope: '当前会话不受影响。',
         defaultModelFix: '改为 {model}',
         defaultModelFixed: '默认模型已更新。',
     policyTitle: '自动处理',
@@ -1351,6 +1356,7 @@ window.__ModuleLoader__.load({
    next conversation works at all, so a broken one earns exactly one line here. */
 .llmm-default-warn{display:flex;align-items:center;gap:8px;margin:0 0 8px;padding:6px 10px;border:0.5px solid var(--dsw-alias-state-warn-primary);border-radius:var(--dsw-radius-md);background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}
 .llmm-default-warn-text{flex:1;min-width:0}
+.llmm-default-warn-scope{opacity:.85}
 .llmm-default-warn button{flex:none;border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .llmm-default-note{margin:0 0 8px;padding:0 2px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
 
@@ -3004,6 +3010,12 @@ window.__ModuleLoader__.load({
         buttons[next].focus()
       }
 
+      // Whether this conversation is the one that would use that default. A session
+      // without its own selection inherits it, so the warning is about *this* chat;
+      // a session that picked its own model needs to be told that this line is not
+      // about it, or the sentence reads as a fault report for the wrong conversation.
+      const runsOnDefault = current === null
+        || (defaultRow !== null && current.provider === defaultRow.route && current.model === defaultRow.model)
       const warnDefault = defaultRow !== null && defaultRow.known === true && defaultRow.unusable === true
       const fixDefault = async () => {
         const target = defaultRow?.suggestion
@@ -3039,8 +3051,17 @@ window.__ModuleLoader__.load({
         ),
         warnDefault
           ? h('div', { className: 'llmm-default-warn' },
-            h('span', { className: 'llmm-default-warn-text' },
-              t('defaultModelWarn').replace('{model}', defaultRow.model)),
+            h('span', {
+              className: 'llmm-default-warn-text',
+              title: typeof defaultRow.detail === 'string' ? defaultRow.detail : '',
+            },
+              t('defaultModelWarn')
+                .replace('{model}', defaultRow.model)
+                .replace('{why}', statusLabel(defaultRow.status)),
+              runsOnDefault ? null : ' ',
+              runsOnDefault
+                ? null
+                : h('span', { className: 'llmm-default-warn-scope' }, t('defaultModelScope'))),
             defaultRow.suggestion !== null && defaultRow.suggestion !== undefined
               ? h('button', { type: 'button', onClick: fixDefault },
                 t('defaultModelFix').replace('{model}', defaultRow.suggestion.model))

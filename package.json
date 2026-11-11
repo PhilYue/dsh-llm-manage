@@ -1,6 +1,6 @@
 {
   "name": "dsh-llm-manage",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.3.0"
   },

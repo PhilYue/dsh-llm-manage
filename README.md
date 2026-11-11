@@ -266,6 +266,14 @@ button that writes it. Otherwise every new session starts on a model that is abo
 fail, and the recovery machinery is doing nothing but cleaning up after a choice made
 somewhere else.
 
+The line states the **reason** rather than a verdict — `quota exhausted`, `needs
+authorization`, `route unreachable` — because "cannot be called" sends you looking for a
+network problem when the account has simply run out of free usage; the raw provider text
+stays in the tooltip. It also says **whose** problem it is: a conversation that never picked
+its own model inherits the default and is told so, while one that chose another model gets
+"this conversation keeps its own model" instead of a warning about somebody else's
+default.
+
 ### The switch happens, and the banner proves it
 
 Two mechanisms move a model, and the difference matters:
