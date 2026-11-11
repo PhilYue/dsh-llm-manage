@@ -590,12 +590,14 @@ as a different product pasted over this one.
 
 ![The model picker, rendered from a synthetic catalogue](docs/picker.png)
 
-The picture is a synthetic render, not a photograph of anyone's harness: `preview.mjs`
-renders the real plugin code against an invented catalogue — fake models on fake routes —
-so the screenshot cannot contain a route you do not already have in front of you in the
-source. To see it against *your* catalogue instead, run `screenshot.mjs` against your own
-harness: it drives the real settings UI — sending the `settings.open` chord and finding the
-Models section — so what you get is your own catalogue in your own theme.
+The picture is a synthetic render, not a photograph of anyone's harness: `shots.mjs` puts
+the real `client.js` in front of a real engine with the app's own theme tokens and an
+invented catalogue — fake models on fake routes — so a published screenshot cannot contain a
+route you do not already have. That is also why `shots.mjs` exists next to `screenshot.mjs`:
+the latter drives a *running* harness, which is the right tool for seeing your own
+catalogue in your own theme, and the wrong one for a public image, because it photographs
+whatever routes and models the author happens to have configured. Regenerate the images
+here with `DSH_CHECKOUT=… node shots.mjs`.
 
 The panel, from the same renderer:
 
@@ -804,6 +806,15 @@ Four tabs, one draft:
   somewhere useful.
 - **Probes** — the last forty probes, newest first, written by every deep probe
   whether it came from the panel, the picker, the tool or a batch.
+
+The catalog, from the same synthetic renderer:
+
+![The model manager on its catalog tab, rendered from the synthetic catalogue](docs/manager.png)
+
+The switch history, same render — one card per incident, each row carrying the clock time
+it happened at as well as the relative age:
+
+![The automatic switch history, rendered from the synthetic catalogue](docs/switches.png)
 
 The dialog's buttons draw their own chrome from the theme (`border-l3` hairline,
 `button-primary-fill` for the committing action) instead of inheriting the
