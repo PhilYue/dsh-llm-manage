@@ -25,6 +25,7 @@
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -1340,8 +1341,8 @@ const textOf = (message) => (Array.isArray(message?.content) ? message.content :
 
   const refused = await call({ action: 'setRecovery' })
   check('a recovery write with neither switch is refused',
-    refused.status === 400 && /retryFirst or autoContinue/.test(refused.body?.error ?? ''),
-    `${refused.status} ${refused.body?.error ?? ''}`)
+    refused.status === 400 && /setRecovery needs/.test(refused.body?.message ?? refused.body?.error ?? ''),
+    `${refused.status} ${refused.body?.message ?? refused.body?.error ?? ''}`)
 
   const saved = await call({ action: 'setRecovery', autoContinue: false, retryFirst: false })
   check('a saved recovery policy comes back from the same place',
@@ -1522,6 +1523,87 @@ const textOf = (message) => (Array.isArray(message?.content) ? message.content :
   const incomplete = await call({ action: 'removeModel', route: ROUTE })
   check('removing without a model is refused', incomplete.status === 400,
     `${incomplete.status} ${incomplete.body?.message ?? ''}`)
+}
+
+// ── the host range this build was verified against ──────────────────────────
+// A host that cannot satisfy the contract this plugin leans on would install and
+// then silently lose rows — the failure mode that opened a colleague's picker
+// without the teamwork row. `engines.dsh` turns that into an install-time refusal,
+// so the range has to exist, be a real range, and admit the host running the suite.
+{
+  const manifest = JSON.parse(readFileSync(join(HERE, 'package.json'), 'utf8'))
+  const range = manifest.engines?.dsh
+  const checkout = process.env.DSH_CHECKOUT ?? join(HERE, '..', '..', '..', 'deepseek-harness')
+  const runtime = JSON.parse(readFileSync(join(checkout, 'packages/boot/app-boot/package.json'), 'utf8')).version
+  let admits = false
+  let why = typeof range === 'string' ? range : 'no engines.dsh declared'
+  if (typeof range === 'string' && range !== '') {
+    try {
+      const semver = createRequire(join(checkout, 'package.json'))('semver')
+      admits = semver.satisfies(runtime, range, { includePrerelease: true })
+      why = `host ${runtime} against ${range}`
+    } catch (error) { why = `unreadable range: ${error.message}` }
+  }
+  check('the manifest declares the host range it was verified against', admits, why)
+}
+
+// ── the recovery budgets are policy, not constants ───────────────────────────
+// How many models may be tried, how many times the work may be picked back up and
+// how long a session is given to go idle are the three numbers a bad week makes
+// someone want to raise. They are numbers on the same stored policy as the two
+// switches, so they have to survive a write and actually bound the work.
+{
+  const numeric = await call({ action: 'setRecovery', maxSwitches: 1, maxContinuations: 0, idleWaitMs: 250 })
+  check('the recovery budgets can be read and written as numbers',
+    numeric.body?.value?.maxSwitches === 1
+      && numeric.body?.value?.maxContinuations === 0
+      && numeric.body?.value?.idleWaitMs === 250,
+    JSON.stringify(numeric.body?.value ?? null))
+
+  const tooMany = await call({ action: 'setRecovery', maxSwitches: 99 })
+  // Range refusals answer with `message`; a body with nothing to write answers with `error`.
+  const tooManyWhy = tooMany.body?.message ?? tooMany.body?.error ?? ''
+  check('a switch budget outside the allowed range is refused',
+    tooMany.status === 400 && /integer from 0 to 10/.test(tooManyWhy),
+    `${tooMany.status} ${tooManyWhy}`)
+
+  const tooFast = await call({ action: 'setRecovery', idleWaitMs: 10 })
+  const tooFastWhy = tooFast.body?.message ?? tooFast.body?.error ?? ''
+  check('an idle wait outside the allowed range is refused',
+    tooFast.status === 400 && /idleWaitMs must be an integer from 50 to 60000/.test(tooFastWhy),
+    `${tooFast.status} ${tooFastWhy}`)
+
+  // The wait is stated in milliseconds and has to become attempts, not a literal.
+  const source = readFileSync(join(HERE, 'index.js'), 'utf8')
+  check('the idle wait is turned into attempts rather than hard-coded',
+    /const attempts = Math\.max\(1, Math\.ceil\(idleWaitMs \/ 50\)\)/.test(source),
+    'a literal attempt count would ignore the number the dialog shows')
+
+  const capped = repairedAgent(58)
+  await observe(capped, at(2))
+  // The budget is a count of moves, so the count of moves is what gets asserted; the
+  // refusal text is internal bookkeeping and reading it would only test my own plumbing.
+  const movesBefore = sessionCalls.length
+  await fireError(capped, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  await fireError(capped, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  const moves = sessionCalls.slice(movesBefore).map(entry => entry.model)
+  check('the switch budget stops a second switch in the same turn',
+    moves.length === 1,
+    `${moves.length} move(s): ${moves.join(' | ')}`)
+
+  turnEnd('sess-58')
+  await settle()
+  const cappedLog = await logFor('sess-58')
+  check('a continuation budget of zero stops the pickup and says so',
+    cappedLog?.continued === false && /already continued 0 time/.test(cappedLog?.continueRefused ?? ''),
+    `continued=${cappedLog?.continued} refused=${cappedLog?.continueRefused ?? 'none'}`)
+
+  const restored = await call({ action: 'setRecovery', maxSwitches: 3, maxContinuations: 2, idleWaitMs: 1000 })
+  check('the budgets can be put back to their defaults',
+    restored.body?.value?.maxSwitches === 3
+      && restored.body?.value?.maxContinuations === 2
+      && restored.body?.value?.idleWaitMs === 1000,
+    JSON.stringify(restored.body?.value ?? null))
 }
 
 // The seats this plugin takes over keep growing upstream, and a replacement

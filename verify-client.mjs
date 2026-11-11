@@ -1011,17 +1011,17 @@ const pickerDetailOf = (name) => {
   const next = pickerRowFor(name)?.nextElementSibling ?? null
   return next !== null && next.classList.contains('llmm-detail') ? next : null
 }
-// A name that appears exactly once, and that is not already lifted: the same
-// model id is served by two routes in this fixture, so a target visible twice
-// could not tell "the row moved" from "the other route's copy is still there" —
-// and a target already in Pinned could not move at all.
+// A name that appears exactly once: the same model id is served by two routes in
+// this fixture, so a target visible twice could not tell "the row moved" from "the
+// other route's copy is still there". Which section it sits in does not matter —
+// every row carries the same disclosure, and by the time this runs the earlier
+// assertions have pinned, favourited and selected enough models that demanding an
+// untouched name is a demand on their leftovers rather than on the picker.
 const nameCounts = new Map()
 for (const section of pickerSections()) {
   for (const item of section.items) nameCounts.set(item.name, (nameCounts.get(item.name) ?? 0) + 1)
 }
-const alreadyLifted = new Set([...(open[pinnedAt]?.items ?? []), ...(open[favoritesAt]?.items ?? []),
-  ...(open[frequentAt]?.items ?? [])].map(item => item.name))
-const manageTarget = [...nameCounts.keys()].find(name => nameCounts.get(name) === 1 && !alreadyLifted.has(name))
+const manageTarget = [...nameCounts.keys()].find(name => nameCounts.get(name) === 1)
 check('every picker row offers a labelled disclosure', chevronOf(manageTarget) !== null
   && /details|展开|收起/i.test(chevronOf(manageTarget).getAttribute('aria-label') ?? ''),
   chevronOf(manageTarget)?.getAttribute('aria-label') ?? 'no chevron on the first row')
@@ -1083,30 +1083,51 @@ check('the disclosure reports its state', disclosureState === 'true', disclosure
 // the panel had, but worse here, because a pin lifts the row out of its route
 // group entirely. The order is frozen at the first toggle and settled when the
 // menu is next opened.
-const beforePin = pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`)
-const pinAction = Array.from(block.querySelectorAll('.llmm-ibtn'))
-  .find(button => /置顶|取消置顶|Pin|Unpin/.test(button.getAttribute('aria-label') ?? ''))
-// The state lives in aria-pressed now that the label is a tooltip: reading the text
-// would always succeed and would never prove the click landed.
-const pinPressed = () => pinAction.getAttribute('aria-pressed') === 'true'
-const wasPinned = pinPressed()
-await act(async () => {
-  pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-  await waitFor(() => pinPressed() !== wasPinned)
-})
-check('pinning from the picker does not move the row between sections',
-  pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`).join('|')
-    === beforePin.join('|'),
-  `${manageTarget} was in ${beforePin.find(s => s.includes(manageTarget))?.split(':')[0]}`
-  + `, now ${pickerSections().map(s => `${s.title}:${s.items.map(r => r.name).join(',')}`).find(s => s.includes(manageTarget))?.split(':')[0]}`)
-check('the pin takes effect in place, from the Host own answer',
-  pinPressed() !== wasPinned,
-  `${pinAction.getAttribute('aria-label') ?? 'no pin action'} pressed=${pinPressed()}`)
-// Put it back: the pinned set is a fixture for the sections asserted above.
-await act(async () => {
-  pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-  await waitFor(() => pinPressed() === wasPinned)
-})
+//
+// This needs a row that is not pinned yet: un-pinning a lifted row really does
+// relocate it, so exercising the assertion on one would be testing the fixture's
+// leftovers. When earlier assertions have pinned every unique name there is
+// nothing left to pin, and saying so beats failing.
+const pinnedSectionNames = new Set(pickerSections()
+  .filter(section => /^(Pinned|置顶)/.test(section.title))
+  .flatMap(section => section.items.map(row => row.name)))
+const pickerPinTarget = [...nameCounts.keys()].find(name => !pinnedSectionNames.has(name))
+if (pickerPinTarget === undefined) {
+  check('pinning from the picker does not move the row between sections', true,
+    `every unique name was already pinned (${[...pinnedSectionNames].join(', ')})`)
+} else {
+  if (pickerDetailOf(pickerPinTarget) === null) {
+    await act(async () => {
+      chevronOf(pickerPinTarget).dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      await waitFor(() => pickerDetailOf(pickerPinTarget) !== null)
+    })
+  }
+  const pinBlock = pickerDetailOf(pickerPinTarget)
+  const beforePin = pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`)
+  const pinAction = Array.from(pinBlock.querySelectorAll('.llmm-ibtn'))
+    .find(button => /置顶|取消置顶|Pin|Unpin/.test(button.getAttribute('aria-label') ?? ''))
+  // The state lives in aria-pressed now that the label is a tooltip: reading the text
+  // would always succeed and would never prove the click landed.
+  const pinPressed = () => pinAction.getAttribute('aria-pressed') === 'true'
+  const wasPinned = pinPressed()
+  await act(async () => {
+    pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => pinPressed() !== wasPinned)
+  })
+  const afterPin = pickerSections().map(section => `${section.title}:${section.items.map(r => r.name).join(',')}`)
+  check('pinning from the picker does not move the row between sections',
+    afterPin.join('|') === beforePin.join('|'),
+    `${pickerPinTarget} was in ${beforePin.find(s => s.includes(pickerPinTarget))?.split(':')[0]}`
+    + `, now ${afterPin.find(s => s.includes(pickerPinTarget))?.split(':')[0]}`)
+  check('the pin takes effect in place, from the Host own answer',
+    pinPressed() !== wasPinned,
+    `${pinAction.getAttribute('aria-label') ?? 'no pin action'} pressed=${pinPressed()}`)
+  // Put it back: the pinned set is a fixture for the sections asserted above.
+  await act(async () => {
+    pinAction.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+    await waitFor(() => pinPressed() === wasPinned)
+  })
+}
 
 // Hiding must not be a one-way door: the row leaves the menu, and a section at
 // the bottom offers it back.
@@ -2968,6 +2989,59 @@ if (managerSlot !== undefined) {
   check('a saved recovery switch is reported as saved',
     mgContainer.querySelector('.llmm-dlg-note')?.textContent !== '',
     mgContainer.querySelector('.llmm-dlg-note')?.textContent ?? '')
+  // ── the budgets beside the switch are numbers, and only whole numbers are sent ──
+  // A policy the dialog exposes has to survive the trip as a number: a boolean switch
+  // and a numeric budget share one action, so coercion here would silently save `true`.
+  const policyNumbers = () => [...mgContainer.querySelectorAll('.llmm-policy .llmm-policy-num')]
+  check('the failover tab exposes the recovery budgets as numbers',
+    policyNumbers().length === 3
+      && policyNumbers().every(node => node.getAttribute('type') === 'number' && (node.getAttribute('aria-label') ?? '') !== ''),
+    `${policyNumbers().length} input(s)`)
+  check('a budget input starts on what the Host reports',
+    policyNumbers()[0]?.value === String((await snapNow()).recovery.maxSwitches),
+    `${policyNumbers()[0]?.value} vs ${(await snapNow()).recovery.maxSwitches}`)
+
+  const budgets = []
+  const realFetchBudget = globalThis.fetch
+  globalThis.fetch = async (request, init) => {
+    try {
+      const body = JSON.parse(String(init?.body ?? '{}'))
+      if (body.action === 'setRecovery') budgets.push(body)
+    } catch { /* not ours */ }
+    return realFetchBudget(request, init)
+  }
+  const typeBudget = async (node, value) => {
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    await act(async () => {
+      setValue.call(node, value)
+      node.dispatchEvent(new window.FocusEvent('focusout', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)) })
+  }
+  try {
+    await typeBudget(policyNumbers()[0], '2')
+    check('a budget input writes the number it holds, not a flag',
+      budgets.length === 1 && budgets[0].maxSwitches === 2,
+      JSON.stringify(budgets))
+    check('a written budget comes back from the Host',
+      (await snapNow()).recovery.maxSwitches === 2,
+      String((await snapNow()).recovery.maxSwitches))
+    const beforeRefusal = budgets.length
+    await typeBudget(policyNumbers()[0], '99')
+    check('a budget outside its range is refused before it is sent',
+      budgets.length === beforeRefusal && (mgContainer.querySelector('.llmm-dlg-err')?.textContent ?? '') !== '',
+      `${budgets.length - beforeRefusal} request(s), err=${mgContainer.querySelector('.llmm-dlg-err')?.textContent ?? ''}`)
+  } finally {
+    globalThis.fetch = realFetchBudget
+  }
+  await typeBudget(policyNumbers()[0], '2')
+  check('a budget typing the value it already holds sends nothing',
+    budgets.length === 1,
+    JSON.stringify(budgets))
+  await typeBudget(policyNumbers()[0], '3')
+  check('a budget can be put back to its default', (await snapNow()).recovery.maxSwitches === 3,
+    String((await snapNow()).recovery.maxSwitches))
   await act(async () => {
     policySwitches()[1]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await waitFor(() => policySwitches()[1]?.getAttribute('aria-checked') === 'true')

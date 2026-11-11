@@ -1,6 +1,9 @@
 {
   "name": "dsh-llm-manage",
-  "version": "0.3.13",
+  "version": "0.3.14",
+  "engines": {
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
+  },
   "private": false,
   "type": "module",
   "description": "Model inventory, health reasons and quota fallback for DSH LLM provider routes",

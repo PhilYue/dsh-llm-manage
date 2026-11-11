@@ -82,6 +82,12 @@ across upgrades. Defaults:
     fallback:
       enabled: true
       chain: []         # 'route/model' entries, tried first
+    recovery:
+      retryFirst: true  # let the platform retry a transient failure before we move
+      autoContinue: true  # pick the work back up once the model has moved
+      maxSwitches: 3    # automatic switches allowed per request (0 = never move)
+      maxContinuations: 2  # pickups allowed per request (0 = move and stop)
+      idleWaitMs: 1000  # how long to wait for the session to go idle before giving up
     usage:
       enabled: true     # local proficiency/heat counters
       seed: true        # one pass over existing session logs at startup
@@ -91,7 +97,41 @@ across upgrades. Defaults:
 The fallback chain order is: `fallback.chain`, then pinned models, then favorites, then the
 remaining models on the same route, then other routes. Models already known to be retired,
 protocol-incompatible, hidden, or inside their quota cooldown are skipped. At most three
-automatic switches happen per turn.
+automatic switches happen per turn by default — see "Budgets are policy, not constants"
+below for the three numbers and where to change them.
+
+### The host has to be new enough
+
+`package.json` declares `engines.dsh`. DSH reads it before installing and before
+activating a plugin, and it decides compatibility on its own (peer dependencies are
+ignored once it is present), so a host outside the range fails **at install time** instead
+of installing and then quietly rendering less than it should.
+
+That matters more here than it usually does: this plugin takes over UI seats
+(`conversation.input.model` and the session options that hang off it), a projection
+(`agentTeam`), and SDK calls (`agent.followup`, `sessionProjections`, `remote.agentTeams`)
+that only exist from 0.2.2 onwards. Installed into an older host it would still load, still
+look right, and silently drop the rows whose plumbing is missing — which reads as "the
+plugin forgot to implement it". A refused install is the honest failure.
+
+### Budgets are policy, not constants
+
+Three numbers used to be constants in the Host. They are the ones an outage actually
+makes you want to change, so they are now config, and editable from **Model manager →
+Failover → Automatic handling**:
+
+| Setting | Default | What it bounds |
+|---|---|---|
+| switches per request | 3 | automatic model switches inside one request |
+| continuations per request | 2 | pickups of the interrupted work (0 = move and stop) |
+| idle wait (ms) | 1000 | how long we wait for the session to go idle before giving up |
+
+`0` is a real value, not "unset": zero switches means never move automatically, zero
+continuations means move but leave the work for you. Writing any of them stores an override
+in the plugin's own config document — never in your `cordis.patch.yml` — and the dialog
+reads the effective value back from the Host, so what you see is what the next failure will
+use. Out-of-range input is refused both in the field and at the Host (`400`), because a
+number that silently becomes something else is worse than a rejected edit.
 
 ### Which failures switch, and which never do
 

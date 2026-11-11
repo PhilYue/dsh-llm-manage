@@ -121,6 +121,12 @@ const PROBE_FRESH_MS = 6 * 60 * 60 * 1000
 const MAX_CONTINUATIONS_PER_REQUEST = 2
 
 /**
+ * Ceiling for the recovery budgets a person may raise from the panel. Beyond this the
+ * numbers stop describing a policy and start describing a runaway.
+ */
+const RECOVERY_LIMIT = 10
+
+/**
  * Business codes this plugin's gateway reports in its error body.
  *
  * The gateway reports a per-model quota exhaustion as `429`, which DSH's own
@@ -478,6 +484,18 @@ function resolveConfig(raw) {
        * one is how a good model gets a reputation it did not earn.
        */
       retryFirst: recovery.retryFirst !== false,
+      /**
+       * How many model switches one request may spend. Zero means "never switch on
+       * its own" — an explicit ceiling rather than a missing feature.
+       */
+      maxSwitches: nonNegativeInt(recovery.maxSwitches, MAX_FALLBACKS_PER_TURN),
+      /** How many continuation turns one request may queue. Zero means "switch and stop there". */
+      maxContinuations: nonNegativeInt(recovery.maxContinuations, MAX_CONTINUATIONS_PER_REQUEST),
+      /**
+       * How long the continuation waits for the failing turn to finish closing before
+       * it gives up and leaves the next message to the person.
+       */
+      idleWaitMs: positiveInt(recovery.idleWaitMs, 1000),
     },
     usage: {
       /** Count real model round-trips into the per-model proficiency ledger. */
@@ -988,6 +1006,11 @@ export function apply(ctx, rawConfig) {
     return {
       retryFirst: typeof stored.retryFirst === 'boolean' ? stored.retryFirst : config.recovery.retryFirst,
       autoContinue: typeof stored.autoContinue === 'boolean' ? stored.autoContinue : config.recovery.autoContinue,
+      // The numeric ceilings are the ones people actually raise when a bad gateway
+      // day eats their afternoon, so they are read the same way the switches are.
+      maxSwitches: nonNegativeInt(stored.maxSwitches, config.recovery.maxSwitches),
+      maxContinuations: nonNegativeInt(stored.maxContinuations, config.recovery.maxContinuations),
+      idleWaitMs: positiveInt(stored.idleWaitMs, config.recovery.idleWaitMs),
     }
   }
 
@@ -2342,7 +2365,8 @@ export function apply(ctx, rawConfig) {
     }
     const budgetKey = `${agent.id}/${turn}`
     const spent = fallbacksThisTurn.get(budgetKey) ?? 0
-    if (spent >= MAX_FALLBACKS_PER_TURN) {
+    const { maxSwitches } = await effectiveRecovery()
+    if (spent >= maxSwitches) {
       return { ok: false, why: `already switched ${spent} times this turn` }
     }
     const chain = await fallbackChain(provider, failedModel)
@@ -2551,10 +2575,15 @@ export function apply(ctx, rawConfig) {
       return { ok: false, why: 'automatic recovery is off for this session' }
     }
     const spent = continuations.get(agent.id) ?? 0
-    if (spent >= MAX_CONTINUATIONS_PER_REQUEST) {
+    const { maxContinuations, idleWaitMs } = await effectiveRecovery()
+    if (spent >= maxContinuations) {
       return { ok: false, why: `already continued ${spent} time(s) for this request` }
     }
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    // The wait is a policy value rather than a hardcoded 20 ticks: a scheduler on a
+    // loaded machine needs a wider window, and a local one should not idle for a
+    // second before saying it gave up.
+    const attempts = Math.max(1, Math.ceil(idleWaitMs / 50))
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
       const pending = (agent.inbox?.nextStep?.length ?? 0) + (agent.inbox?.nextTurn?.length ?? 0)
       if (pending > 0) {
         return { ok: false, why: 'a message is already waiting; the new model will answer it' }
@@ -3261,8 +3290,25 @@ export function apply(ctx, rawConfig) {
               const next = {}
               if (typeof body?.retryFirst === 'boolean') next.retryFirst = body.retryFirst
               if (typeof body?.autoContinue === 'boolean') next.autoContinue = body.autoContinue
-              if (next.retryFirst === undefined && next.autoContinue === undefined) {
-                return json({ ok: false, error: 'setRecovery needs retryFirst or autoContinue' }, 400)
+              // Ceilings are sent as numbers because a text field that only knows
+              // "on" and "off" cannot express "three switches, two continuations".
+              for (const key of ['maxSwitches', 'maxContinuations']) {
+                if (body?.[key] === undefined || body[key] === null) continue
+                const value = Number(body[key])
+                if (!Number.isInteger(value) || value < 0 || value > RECOVERY_LIMIT) {
+                  return json({ ok: false, message: `${key} must be an integer from 0 to ${RECOVERY_LIMIT}` }, 400)
+                }
+                next[key] = value
+              }
+              if (body?.idleWaitMs !== undefined && body.idleWaitMs !== null) {
+                const wait = Number(body.idleWaitMs)
+                if (!Number.isInteger(wait) || wait < 50 || wait > 60000) {
+                  return json({ ok: false, message: 'idleWaitMs must be an integer from 50 to 60000' }, 400)
+                }
+                next.idleWaitMs = wait
+              }
+              if (Object.keys(next).length === 0) {
+                return json({ ok: false, error: 'setRecovery needs retryFirst, autoContinue, maxSwitches, maxContinuations or idleWaitMs' }, 400)
               }
               await store.update(CONFIG_DOC, overlay => ({
                 ...overlay,

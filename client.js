@@ -290,7 +290,14 @@ window.__ModuleLoader__.load({
     policyRetry: 'Retry a transient failure before moving',
     policyRetryNote: 'A single 5xx is not a broken model; the harness retries those with its own backoff.',
     policyContinue: 'Pick the work back up after a switch',
-    policyContinueNote: 'Queues one new turn, telling it to check the actual state first. At most twice per request.',
+    policyContinueNote: 'Queues one new turn, telling it to check the actual state first.',
+    policySwitches: 'Model switches per request',
+    policySwitchesNote: 'How many model switches one request may spend before it stops and asks.',
+    policyContinuations: 'Continuations per request',
+    policyContinuationsNote: 'How many new turns a repair may queue. Zero switches the model and stops there.',
+    policyIdle: 'Wait before giving up (ms)',
+    policyIdleNote: 'How long a continuation waits for the failing turn to finish closing.',
+    policyBad: 'Use a whole number in the allowed range.',
     policySaved: 'Saved',
         continuePrompt: 'Continue from where the previous answer stopped.',
         fallbackSuppress: 'Stop switching',
@@ -552,7 +559,14 @@ window.__ModuleLoader__.load({
     policyRetry: '瞬时失败先重试，再考虑换模型',
     policyRetryNote: '一次 5xx 不代表模型坏了，平台会按自己的退避重试。',
     policyContinue: '换模型后自动继续执行',
-    policyContinueNote: '会排一轮新消息，要求先核对实际状态再继续；每个请求最多两次。',
+    policyContinueNote: '会排一轮新消息，要求先核对实际状态再继续。',
+    policySwitches: '每个请求最多切换几次模型',
+    policySwitchesNote: '一次请求最多花掉几次自动切换，用完就停下等人。',
+    policyContinuations: '每个请求最多续跑几次',
+    policyContinuationsNote: '一次修复最多排几轮新消息；填 0 表示换完模型就停。',
+    policyIdle: '放弃前等待多久（毫秒）',
+    policyIdleNote: '续跑等上一轮收尾的最长时间。',
+    policyBad: '请填允许范围内的整数。',
     policySaved: '已保存',
         continuePrompt: '请从中断处继续上一条回答。',
         fallbackSuppress: '不再自动切换',
@@ -1148,6 +1162,9 @@ window.__ModuleLoader__.load({
 .llmm-policy-row{display:flex;align-items:flex-start;gap:9px;padding:5px 0}
 .llmm-policy-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .llmm-policy-label{font-size:12px;line-height:18px;color:var(--dsw-alias-label-primary)}
+.llmm-policy-num{flex:none;width:60px;height:24px;padding:0 6px;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-sm);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;text-align:right;font-variant-numeric:tabular-nums}
+.llmm-policy-num:focus-visible{outline:none;border-color:var(--dsw-alias-border-l4)}
+.llmm-policy-num:disabled{opacity:.5}
 .llmm-policy-note{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
 .llmm-policy-row .llmm-switch{margin-top:2px;flex:none}
 .llmm-fb-notes{margin:0;padding:0 0 10px 16px}
@@ -3452,6 +3469,39 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * Save one numeric ceiling.
+       *
+       * Kept apart from the switch handler because the value is a number, not a
+       * negation: `!value` on a limit would silently turn 3 into `false`. The field is
+       * allowed to be refused — a blank or out-of-range entry leaves the old number in
+       * force and says so, instead of quietly pinning it to the minimum.
+       */
+      const commitPolicyNumber = async (key, raw) => {
+        if (busy !== '') return
+        const value = Number(String(raw).trim())
+        if (!Number.isInteger(value) || value < 0 || value > 10) {
+          setError(t('policyBad'))
+          return
+        }
+        if (value === recovery[key]) return
+        setBusy('policy')
+        setError('')
+        setNote('')
+        try {
+          const data = await callHost({ action: 'setRecovery', [key]: value })
+          if (data === undefined || data.value === undefined) return
+          setNote(t('policySaved'))
+          const fresh = await callHost({ action: 'snapshot' })
+          if (fresh !== undefined && fresh.value !== undefined) setSnap(fresh.value)
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(failure instanceof Error ? failure.message : String(failure))
+        } finally {
+          setBusy('')
+        }
+      }
+
       const pull = async () => {
         setBusy('pull')
         setNote('')
@@ -3981,11 +4031,37 @@ window.__ModuleLoader__.load({
           onClick: () => setPolicy(key),
         }, h('span', { className: 'llmm-switch-knob', 'aria-hidden': 'true' })))
 
+      /**
+       * One numeric ceiling, editable in place.
+       *
+       * Uncontrolled on purpose: the number is committed when the field loses focus, so
+       * typing "1" on the way to "12" asks the host for nothing.
+       */
+      const policyNumber = (key, label, note, min, max) => h('div', { className: 'llmm-policy-row', key },
+        h('div', { className: 'llmm-policy-text' },
+          h('span', { className: 'llmm-policy-label' }, t(label)),
+          h('span', { className: 'llmm-policy-note' }, t(note))),
+        h('input', {
+          type: 'number',
+          className: 'llmm-policy-num',
+          defaultValue: String(recovery[key] ?? ''),
+          min,
+          max,
+          step: 1,
+          'aria-label': t(label),
+          disabled: busy !== '',
+          onKeyDown: (event) => { if (event.key === 'Enter') event.currentTarget.blur() },
+          onBlur: (event) => { commitPolicyNumber(key, event.target.value) },
+        }))
+
       const failoverView = h(React.Fragment, null,
         h('section', { className: 'llmm-policy', 'aria-label': t('policyTitle') },
           h('div', { className: 'llmm-policy-head' }, t('policyTitle')),
           policyRow('retryFirst', 'policyRetry', 'policyRetryNote'),
-          policyRow('autoContinue', 'policyContinue', 'policyContinueNote')),
+          policyRow('autoContinue', 'policyContinue', 'policyContinueNote'),
+          policyNumber('maxSwitches', 'policySwitches', 'policySwitchesNote', 0, 10),
+          policyNumber('maxContinuations', 'policyContinuations', 'policyContinuationsNote', 0, 10),
+          policyNumber('idleWaitMs', 'policyIdle', 'policyIdleNote', 50, 60000)),
         h('label', { className: 'llmm-fb-toggle' },
           h('input', {
             type: 'checkbox',
