@@ -130,7 +130,7 @@ const sessionController = {
   },
 }
 const agentDefaultModel = {
-  currentSelection: () => ({ provider: ROUTE, model: at(0) }),
+  currentSelection: () => savedDefaults.at(-1) ?? { provider: ROUTE, model: at(0) },
   saveSelection: async (next) => { savedDefaults.push({ ...next }) },
 }
 const hostGet = (k) => {
@@ -693,11 +693,11 @@ check('a backend that appears after apply still gets its logs counted',
 const emitSession = (sessionId, event) => {
   for (const cb of listeners['session/event'] ?? []) cb({ id: sessionId }, event)
 }
-const messageEvent = (model, turn = 1) => ({
+const messageEvent = (model, turn = 1, provider = ROUTE) => ({
   type: 'assistant/message',
   seq: 1,
   time: Date.now(),
-  data: { turn, step: 1, message: { role: 'assistant', source: { kind: 'model', provider: ROUTE, model } }, stream: [] },
+  data: { turn, step: 1, message: { role: 'assistant', source: { kind: 'model', provider, model } }, stream: [] },
 })
 /** Fail one model on a fresh session, exactly as the loop would. */
 const decideSwitch = async (n, failedModel) => {
@@ -1604,6 +1604,93 @@ const textOf = (message) => (Array.isArray(message?.content) ? message.content :
       && restored.body?.value?.maxContinuations === 2
       && restored.body?.value?.idleWaitMs === 1000,
     JSON.stringify(restored.body?.value ?? null))
+}
+
+
+// ── a switch is corrected once the next turn proves it ──────────────────────
+// The turn that fails cannot know whether the new model will answer; the next turn
+// can. The record therefore starts as unreached and is corrected, instead of staying
+// wrong forever — which is what made the old "recovered" column always zero.
+{
+  const a = repairedAgent(60)
+  await observe(a, at(2))
+  await fireError(a, { code: 'RATE_LIMIT', status: 429, message: gatewayBody(2007, 'quota exhausted') })
+  turnEnd('sess-60', 1)
+  await settle(400)
+  const first = (await call({ action: 'failoverHistory' })).body?.value?.records
+    ?.find(record => record.sessionId === 'sess-60')
+  check('a switch is recorded with an id it can be corrected by',
+    typeof first?.id === 'string' && first?.outcome === 'unreached',
+    `id=${typeof first?.id} outcome=${first?.outcome}`)
+  const promised = first?.to
+  emitSession('sess-60', messageEvent(promised?.model, 2, promised?.route))
+  await settle(300)
+  const corrected = (await call({ action: 'failoverHistory' })).body?.value?.records
+    ?.find(record => record.sessionId === 'sess-60')
+  check('the next turn on the new model turns the report into reached',
+    corrected?.outcome === 'reached' && typeof corrected?.reachedAt === 'number',
+    `outcome=${corrected?.outcome} at=${typeof corrected?.reachedAt} continued=${first?.continued} refused=${first?.continueRefused ?? 'none'}`)
+  check('a record written before ids existed is marked as beyond correction',
+    (await call({ action: 'failoverHistory' })).body?.value?.records
+      ?.some(record => record.legacy === false), 'no record without a legacy flag')
+}
+
+// ── failures a model switch cannot fix ──────────────────────────────────────
+// "Needs GitHub authorization" and "the host does not resolve" are both facts no
+// other model changes. Switching there burns the budget and moves the session for
+// nothing, so the answer is to stand still — and the second one is not even a fact
+// about the model.
+{
+  const before = sessionCalls.length
+  const a = repairedAgent(61)
+  await observe(a, at(2))
+  await fireError(a, {
+    code: 'UNAUTHORIZED',
+    status: 403,
+    message: '需要 GitHub 授权并 star 仓库后使用 EAC 模型',
+  })
+  check('a model that needs authorization is not swapped for another',
+    sessionCalls.length === before,
+    `moved ${sessionCalls.length - before} time(s)`)
+  const b = repairedAgent(62)
+  await observe(b, at(2))
+  await fireError(b, { code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND gateway.invalid' })
+  check('a route that does not resolve is not read as a model failure',
+    sessionCalls.length === before,
+    `moved ${sessionCalls.length - before} time(s)`)
+}
+
+// ── clearing the history is not the same as destroying it ───────────────────
+{
+  await call({ action: 'clearFailover' })
+  const cleared = (await call({ action: 'failoverHistory' })).body?.value?.records
+  const undo = await call({ action: 'undoClearFailover' })
+  const restored = (await call({ action: 'failoverHistory' })).body?.value?.records
+  check('clearing the history can be taken back',
+    cleared.length === 0 && undo.status === 200 && restored.length > 0,
+    `cleared=${cleared.length} undo=${undo.status} restored=${restored.length}`)
+  const again = await call({ action: 'undoClearFailover' })
+  check('there is nothing to take back once the restore has happened',
+    again.status === 400, `${again.status}`)
+}
+
+// ── the default model is a fact worth checking, and changing ────────────────
+{
+  const before = (await call({ action: 'defaultModel' })).body?.value
+  check('the host can report the model a new session would start on',
+    before?.known === true && before?.route === ROUTE && before?.model === at(0),
+    JSON.stringify({ known: before?.known, route: before?.route, model: before?.model }))
+  const pick = at(1)
+  const saved = await call({ action: 'setDefaultModel', route: ROUTE, model: pick })
+  const after = (await call({ action: 'defaultModel' })).body?.value
+  check('the default model can be moved, and the move reads back',
+    saved.status === 200 && after?.model === pick
+      && savedDefaults.some(entry => entry.model === pick),
+    `status=${saved.status} model=${after?.model} saved=${JSON.stringify(savedDefaults.at(-1) ?? null)}`)
+  const refused = await call({ action: 'setDefaultModel', model: pick })
+  check('a default model without a route is refused',
+    refused.status === 400, `${refused.status}`)
+  await call({ action: 'setDefaultModel', route: ROUTE, model: at(0) })
 }
 
 // The seats this plugin takes over keep growing upstream, and a replacement

@@ -61,6 +61,9 @@ process.env.DSH_HOME = HOME
       { at: now - 3000, sessionId: 'sess-seed-a', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'unreached', continued: true },
       { at: now - 2000, sessionId: 'sess-seed-b', from: { route: 'seed-gateway', model: 'seeded-flaky' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'quota', detail: '', outcome: 'reached', continued: false, continueRefused: 'already continued 2 time(s) for this request' },
       { at: now - 1000, sessionId: 'sess-seed-c', from: { route: 'seed-gateway', model: 'seeded-other' }, to: { route: 'seed-gateway', model: 'seeded-ok' }, reason: 'error', detail: '', outcome: 'ran-elsewhere', continued: true },
+      // The same Session failing again 30s later: one incident, two rows. Without this
+      // the grouping would collapse nothing and the assertion below would prove nothing.
+      { at: now - 500, sessionId: 'sess-seed-c', from: { route: 'seed-gateway', model: 'seeded-flaky2' }, to: { route: 'seed-gateway', model: 'seeded-ok2' }, reason: 'error', detail: '', outcome: 'reached', continued: true },
     ],
   }), 'utf8')
 }
@@ -1241,8 +1244,8 @@ check('a hidden row can be unhidden from the menu that hid it',
     /不再自动切换|Stop switching/i.test(bannerText()), bannerText().slice(0, 120))
   const bannerButtons = () => [...bannerHost.querySelectorAll('.llmm-banner-acts button')]
   const buttonNamed = (pattern) => bannerButtons().find(node => pattern.test(node.textContent ?? ''))
-  check('a switch that never landed offers no continuation',
-    buttonNamed(/接续|^Continue$/i) === undefined,
+  check('a switch that never landed offers a continuation',
+    buttonNamed(/接续|^Continue$/i) !== undefined,
     bannerButtons().map(node => node.textContent).join(' | '))
 
   await renderBanner({
@@ -1250,24 +1253,22 @@ check('a hidden row can be unhidden from the menu that hid it',
     to: { route: SECOND_ROUTE, model: at(1) }, reason: 'quota', detail: 'quota exhausted',
     outcome: 'reached', ran: { route: SECOND_ROUTE, model: at(1) }, sessionSwitched: true,
   })
-  check('a proven switch reports success and offers the way back',
-    /已自动切换模型|Model switched/i.test(bannerText()) && /改回|Switch back/i.test(bannerText()),
+  // A switch that landed is good news, and good news does not take the width of the
+  // conversation: it becomes one quiet line, with undo still reachable from it.
+  check('a proven switch reports itself in one quiet line',
+    bannerHost.querySelector('.llmm-banner-quiet') !== null
+      && /已由|handed over/i.test(bannerText()),
     bannerText().slice(0, 140))
-  check('a proven switch offers to continue on the new model',
-    buttonNamed(/接续|^Continue$/i) !== undefined,
-    bannerButtons().map(node => node.textContent).join(' | '))
-  await act(async () => {
-    buttonNamed(/接续|^Continue$/i)?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
-  })
-  check('continuing fills an editable draft instead of sending one',
-    drafts.length === 1 && /从中断处|from where the previous answer stopped/i.test(drafts[0]),
-    JSON.stringify(drafts))
-  check('the filled draft is persisted through the editor',
-    persisted === 1, `${persisted} persist(s)`)
-  check('the banner says where the continuation went',
-    /已填入草稿|Filled into the draft/i.test(bannerText()), bannerText().slice(0, 160))
-  check('continuing does not submit on its own',
-    drafts.length === 1 && persisted === 1, `drafts=${drafts.length} persists=${persisted}`)
+  check('a proven switch does not warn like a failure',
+    bannerHost.querySelector('.llmm-banner-acts') === null,
+    'the failure banner is still rendered')
+  const quietButtons = () => [...bannerHost.querySelectorAll('.llmm-banner-x')]
+  check('the quiet line still offers the way back',
+    quietButtons().some(node => /改回|Switch back/i.test(node.getAttribute('title') ?? '')),
+    quietButtons().map(node => node.getAttribute('title')).join(' | '))
+  check('a switch that landed offers no continuation',
+    !/接续|^Continue$/i.test(bannerText()),
+    bannerText().slice(0, 140))
 
   await renderBanner({
     at: Date.now(), from: { route: ROUTE, model: at(0) },
@@ -1286,8 +1287,8 @@ check('a hidden row can be unhidden from the menu that hid it',
     to: { route: SECOND_ROUTE, model: at(1) }, reason: 'quota', detail: 'quota exhausted',
     outcome: 'unreached', ran: null, sessionSwitched: true, continued: true,
   })
-  check('a repair that queued the continuation says the work was picked back up',
-    /继续执行|picked back up/i.test(bannerText()), bannerText().slice(0, 140))
+  check('a repair that queued the continuation reads as handed over',
+    /已由|handed over/i.test(bannerText()), bannerText().slice(0, 140))
   check('a continuation already queued does not offer to queue it again',
     buttonNamed(/接续|^Continue$/i) === undefined,
     bannerButtons().map(node => node.textContent).join(' | '))
@@ -1306,11 +1307,28 @@ check('a hidden row can be unhidden from the menu that hid it',
     outcome: 'unreached', ran: null, sessionSwitched: true, continued: false,
     continueRefused: 'a message is already waiting; the new model will answer it',
   })
-  check('a refused continuation still reports the switch as applying to the next message',
-    /下一条消息生效|next message/i.test(bannerText()), bannerText().slice(0, 140))
+  check('a refused continuation says the turn did not come back',
+    /没接上|did not come back/i.test(bannerText()), bannerText().slice(0, 140))
   check('the refusal reason is kept on hover rather than inlined',
     /already waiting/.test(bannerHost.querySelector('.llmm-banner-why')?.getAttribute('title') ?? ''),
     bannerHost.querySelector('.llmm-banner-why')?.getAttribute('title') ?? 'no title')
+  // This is the case the continuation exists for: the run stopped, so offer to pick it
+  // back up as a draft the person can edit and send.
+  check('a switch that did not come back offers to continue',
+    buttonNamed(/接续|^Continue$/i) !== undefined,
+    bannerButtons().map(node => node.textContent).join(' | '))
+  await act(async () => {
+    buttonNamed(/接续|^Continue$/i)?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+  })
+  check('continuing fills an editable draft instead of sending one',
+    drafts.length === 1 && /从中断处|from where the previous answer stopped/i.test(drafts[0]),
+    JSON.stringify(drafts))
+  check('the filled draft is persisted through the editor',
+    persisted === 1, `${persisted} persist(s)`)
+  check('the banner says where the continuation went',
+    /已填入草稿|Filled into the draft/i.test(bannerText()), bannerText().slice(0, 160))
+  check('continuing does not submit on its own',
+    drafts.length === 1 && persisted === 1, `drafts=${drafts.length} persists=${persisted}`)
 
   await act(async () => { bannerRoot.unmount() })
   bannerHost.remove()
@@ -3135,18 +3153,39 @@ if (managerSlot !== undefined) {
   })
   await settle()
   const swRows = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-models .llmm-sw-row'))
+  // The list collapses each burst of retries into one incident card, so the raw rows
+  // only exist once the card is opened. Opening every card is the honest way to read
+  // them: the assertions are about the rows, not about the default collapsed state.
+  const swIncidents = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-inc'))
+  const openIncidents = async () => {
+    // Re-queried every round: React replaces the head nodes when one of them opens, so a
+    // snapshot of the list would dispatch clicks at detached nodes and open exactly one.
+    for (let guard = 0; guard < 12; guard += 1) {
+      const head = [...mgContainer.querySelectorAll('.llmm-sw-inc-head')]
+        .find(node => node.getAttribute('aria-expanded') !== 'true')
+      if (head === undefined) return
+      await act(async () => {
+        head.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
+      })
+    }
+  }
   const swEvents = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-event'))
   check('the switch history tab aggregates the models that triggered a switch',
-    swRows().length === 2, `${swRows().length} model row(s): ${swRows().map(r => r.textContent).join(' | ')}`)
+    swRows().length === 3, `${swRows().length} model row(s): ${swRows().map(r => r.textContent).join(' | ')}`)
   check('the model that keeps failing is named first, with its count',
     /seeded-flaky/.test(swRows()[0]?.textContent ?? '')
       && /^2$/.test((swRows()[0]?.querySelector('.llmm-sw-count')?.textContent ?? '').trim()),
     swRows()[0]?.textContent ?? 'no rows')
   check('every aggregate separates the switches that recovered from those that did not',
-    swRows().every(row => /已恢复|recovered/.test(row.textContent ?? '')
-      && /仍未恢复|still failed/.test(row.textContent ?? '')), swRows()[0]?.textContent ?? 'no rows')
+    swRows().every(row => /已接管|took over/.test(row.textContent ?? '')
+      && /未接管|did not take over/.test(row.textContent ?? '')), swRows()[0]?.textContent ?? 'no rows')
+  check('the recent switches collapse into one card per incident',
+    swIncidents().length === 3
+      && swIncidents().filter(card => /2\s*(步|steps)/.test(card.textContent ?? '')).length === 1,
+    `${swIncidents().length} card(s): ${swIncidents().map(c => c.textContent.slice(0, 40)).join(' | ')}`)
+  await openIncidents()
   check('the raw switches are kept beside the aggregate',
-    swEvents().length === 3 && swEvents().every(row => row.textContent.includes('\u2192')),
+    swEvents().length === 4 && swEvents().every(row => row.textContent.includes('\u2192')),
     `${swEvents().length} event(s)`)
   check('the tab says what it records and why it can be cleared',
     /只记录已经证实的切换|Only proven switches/.test(mgContainer.querySelector('.llmm-sw-note')?.textContent ?? ''),
@@ -3156,7 +3195,7 @@ if (managerSlot !== undefined) {
   // states it, because it is the difference the person feels.
   const continuedChips = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-event .llmm-sw-continued'))
   check('every recorded switch states whether the work was continued',
-    continuedChips().length === 3, `${continuedChips().length} chip(s) of 3 event(s)`)
+    continuedChips().length === 4, `${continuedChips().length} chip(s) of 4 event(s)`)
   check('a continued repair is marked as recovered, a refused one as not',
     /已继续|continued/i.test(continuedChips()[0]?.textContent ?? '')
       && !/未继续|not continued/i.test(continuedChips()[0]?.textContent ?? '')
@@ -3170,7 +3209,7 @@ if (managerSlot !== undefined) {
   // it saw, not a name that may since have been renamed).
   const chips = () => Array.from(mgContainer.querySelectorAll('.llmm-sw-event .llmm-sw-session'))
   check('every switch names the Session it happened in',
-    chips().length === 3, `${chips().length} session chip(s) of 3 event(s)`)
+    chips().length === 4, `${chips().length} session chip(s) of 4 event(s)`)
   check('the Session label is the name the shell shows, not the raw id',
     (chips()[0]?.textContent ?? '') === 'Retry storm on the API',
     chips()[0]?.textContent ?? 'no chip')
@@ -3205,6 +3244,7 @@ if (managerSlot !== undefined) {
     tabs()[2]?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }))
     await settle()
   })
+  await openIncidents()
   check('without a navigator the Session is named, not offered as a dead link',
     chips()[0]?.tagName === 'SPAN' && /flat/.test(chips()[0]?.className ?? ''),
     `${chips()[0]?.tagName ?? 'missing'} ${chips()[0]?.className ?? ''}`)

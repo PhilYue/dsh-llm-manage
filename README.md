@@ -142,11 +142,13 @@ The rule is **scope**, not severity:
 | model not found / retired | one model | yes | yes |
 | wrong protocol for this route | one model | yes | yes |
 | per-model quota exhausted | one model | yes | yes |
+| needs authorization on this account (401/403, OAuth, star-gated) | one model | **never** | yes |
 | other per-model failures | one model | yes | yes |
 | no adapter registered for this route | the whole route | yes | **no** |
 | malformed request / context too long | the request itself | **never** | no |
 | account-wide rate limit | the whole API key | **never** | no |
 | account-wide quota | the whole API key | **never** | no |
+| the route does not answer at all (DNS, TLS, refused socket) | the whole route | **never** | no |
 
 A model-scoped failure moves to another model, because a different model can serve the
 turn. An account-scoped failure never moves: every model shares that key, so switching
@@ -163,6 +165,18 @@ there, synchronously, before the step reads its selection.
 
 A **route with no adapter** is its own scope. Switching models *on that route* cannot
 help — every model there fails the same way — but switching to another provider can, so
+Two of those scopes were learned the hard way, from a real log:
+
+- **Needs authorization** (`AUTH`) is a fact about *this account and this model*: the
+  gateway answered, and the answer was "not for you" — an OAuth grant nobody completed, a
+  model behind "star the repo first". Switching models cannot fix it, so it never switches,
+  and burning the continuation budget on it would only produce the same answer twice. It is
+  still recorded against the model, because "this one needs authorization" is exactly what
+  the next fallback chain should skip.
+- **The route does not answer** (`NETWORK`) is a fact about *nothing in particular*: DNS
+  never resolved, the socket was refused, the certificate did not verify. The model was
+  never asked, so blaming it would remove a perfectly good model from future chains.
+
 it still switches. What it must not do is land in the model's health record: `error` is
 in the set of reasons that make the fallback chain skip a model, and unlike `quota` that
 verdict has no staleness escape, so a single route misconfiguration would have removed
@@ -219,6 +233,12 @@ What that buys, and what it does not:
   request.
 - If it declines to continue it says so, in the same place it used to say "next message
   only" — the banner names the reason instead of leaving you to guess.
+- **"Took over" is a claim with evidence, not a hope.** The turn boundary can only prove
+  that the frozen turn did not come back, so the record is written as `did not take over`
+  and keeps its id. When a later turn finally produces a message on the target model, that
+  same record is amended to `took over`, with the time it happened. Records written before
+  this version have no id and are marked `legacy` in the history rather than silently
+  counted as failures.
 - Ordering is deliberate: an ordinary transient failure goes to the harness's own retry
   policy first (it is bounded, it knows the backoff), and only a failure that survives it
   is treated as a model problem worth moving. A request that is malformed, too large for
@@ -232,6 +252,19 @@ else would be lying about what the plugin is doing), and they are stored in the 
 own config document — the same one the fallback chain uses, so `cordis.patch.yml` is never
 edited behind your back. The Loader row still works as the default: `recovery.retryFirst`
 and `recovery.autoContinue`, both on, and the UI switch simply overrides it.
+
+The same dialog now also carries the numbers behind that policy — switches per request
+(default 3), continuations per request (default 2), and how long to wait for the session to
+go idle before giving up (default 1000 ms). They are ordinary number fields: Enter or blur
+commits, an out-of-range value is refused on the spot instead of being sent, and `0` is a
+real value ("switch nothing", "continue nothing"), not an empty box.
+
+One more check belongs here: if the **default model** — the one new sessions start on — is
+itself retired, missing from the gateway directory, or sitting on an unhealthy record, the
+picker says so in one line and offers the model the fallback chain would pick, with a
+button that writes it. Otherwise every new session starts on a model that is about to
+fail, and the recovery machinery is doing nothing but cleaning up after a choice made
+somewhere else.
 
 ### The switch happens, and the banner proves it
 

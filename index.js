@@ -171,6 +171,18 @@ const REASON = {
    * re-learn one fact, and losing the original error while doing it.
    */
   SHAPE: 'request_shape',
+  /**
+   * The account is not allowed to use this model — an OAuth grant, a repo star, an
+   * allow-list entry. It is a fact about this model under this account, not a reason
+   * to move on: another model does not fix a permission, and switching would hide it.
+   */
+  AUTH: 'unauthorized',
+  /**
+   * The route never answered: DNS, TLS, a refused socket. Nothing is known about the
+   * model, so this must not become its health verdict and must not spend a fallback
+   * on a sibling model that would fail the same way.
+   */
+  NETWORK: 'network',
   /** A probe or request failed for any other reason. */
   ERROR: 'error',
   /** Verified reachable. */
@@ -178,7 +190,7 @@ const REASON = {
 }
 
 /** Reasons that make the fallback chain skip a model. */
-const UNUSABLE_REASONS = new Set([REASON.RETIRED, REASON.PROTOCOL, REASON.QUOTA, REASON.ERROR])
+const UNUSABLE_REASONS = new Set([REASON.RETIRED, REASON.PROTOCOL, REASON.QUOTA, REASON.AUTH, REASON.ERROR])
 
 /**
  * Provider wording that identifies an exhausted quota rather than a transient
@@ -252,6 +264,19 @@ function classifyFailure(failure) {
   }
   if (failure?.code === 'RATE_LIMIT') {
     return { reason: REASON.RATE_LIMITED, detail, scope: 'account', switchable: false }
+  }
+  // A permission is not a fault in the model, but it IS this model's answer for this
+  // account: the gateway is telling the caller to go grant access. Switching spends the
+  // chain to collect the same refusal from every other model, and the user still has no
+  // idea what to do.
+  if (failure?.status === 401 || failure?.status === 403
+    || /unauthori[sz]ed|forbidden|invalid[_ -]?api[_ -]?key|permission[_ -]denied|insufficient[_ ]permissions?|需要.{0,12}授权|请先授权|未授权|授权后使用|star.{0,24}repo|需要.{0,6}star/i.test(text)) {
+    return { reason: REASON.AUTH, detail, scope: 'model', switchable: false }
+  }
+  // The route never answered. A route-scope verdict keeps it off the model's record and
+  // leaves the retry policy alone to back off on its own schedule.
+  if (/ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EHOSTUNREACH|socket hang up|fetch failed|certificate|self[- ]signed/i.test(text)) {
+    return { reason: REASON.NETWORK, detail, scope: 'route', switchable: false }
   }
   if (/model not support|not supported for this (?:route|protocol)|unsupported (?:protocol|model)/i.test(text)) {
     return { reason: REASON.PROTOCOL, detail, scope: 'model', switchable: true }
@@ -919,6 +944,15 @@ export function apply(ctx, rawConfig) {
   const wantContinue = new Map()
   /** Continuations already spent on the current human request, keyed by session id. */
   const continuations = new Map()
+  /**
+   * Switches whose continuation was accepted, keyed by session id.
+   *
+   * `unreached` is the only correct word at the turn boundary, because the platform
+   * freezes the model for the turn that already began. The continuation runs one turn
+   * later on the new model, so this is what makes `reached` a measured fact instead of
+   * a headline that no event could ever satisfy.
+   */
+  const pendingReach = new Map()
   /** Automatic switches already spent, per `sessionId/turn`. */
   const fallbacksThisTurn = new Map()
   /** Routes whose gateway directory was fetched, and when. */
@@ -1062,13 +1096,42 @@ export function apply(ctx, rawConfig) {
    * @returns {Promise<void>} fulfillment after the write.
    */
   async function recordFailover(entry) {
+    // A stable id is what lets the same record be corrected later: the first write can
+    // only say "the switch was queued", and only a later turn can say it worked.
+    const id = randomUUID()
     try {
       await store.update(FAILOVER_DOC, (overlay) => ({
         ...overlay,
         records: [
-          { at: Date.now(), ...entry },
+          { id, at: Date.now(), ...entry },
           ...(Array.isArray(overlay.records) ? overlay.records : []),
         ].slice(0, FAILOVER_LOG_LIMIT),
+      }))
+    } catch {
+      // Diagnostic only.
+    }
+    return id
+  }
+
+  /**
+   * Correct one switch from `unreached` to `reached`.
+   *
+   * The first write happens at the turn boundary, where the only honest answer is
+   * "the target has not answered yet". The continuation makes it answer one turn
+   * later, so the same record is amended instead of a second one being invented.
+   *
+   * @param {string} id - the record to amend.
+   * @returns {Promise<void>} fulfillment after the write.
+   */
+  async function markSwitchReached(id) {
+    try {
+      await store.update(FAILOVER_DOC, (overlay) => ({
+        ...overlay,
+        records: (Array.isArray(overlay.records) ? overlay.records : []).map((record) => (
+          record?.id === id
+            ? { ...record, outcome: 'reached', reachedAt: Date.now() }
+            : record
+        )),
       }))
     } catch {
       // Diagnostic only.
@@ -1126,6 +1189,8 @@ export function apply(ctx, rawConfig) {
    * belongs in a chain at all. Each record is one routing decision this plugin made.
    */
   const FAILOVER_DOC = '__failover__'
+  /** The last cleared history, kept so a reflexive "clear" can be taken back. */
+  const FAILOVER_ARCHIVE_DOC = '__failover_archive__'
   /** How many switch records are kept; old ones stop describing current hardware. */
   const FAILOVER_LOG_LIMIT = 200
   /** Models the user took out of the catalogue view, per route. */
@@ -2305,6 +2370,64 @@ export function apply(ctx, rawConfig) {
   }
 
   /**
+   * Whether the model every new Agent starts on can actually be called.
+   *
+   * The default selection lives in the composition (`agent-default-model`), not in this
+   * plugin, so a model that the gateway later retired leaves every new session failing
+   * on its first message with a switch behind it. Reading it is the only way to warn
+   * before that happens, and the alternative offered here is the same one the fallback
+   * chain would choose.
+   *
+   * @returns {Promise<object>} the default selection and whether it still works.
+   */
+  async function defaultModelStatus() {
+    const service = ctx.get('agentDefaultModel')
+    if (service === undefined || typeof service.currentSelection !== 'function') {
+      return { known: false, why: 'this host does not expose a default model' }
+    }
+    let selection
+    try {
+      selection = service.currentSelection()
+    } catch {
+      selection = undefined
+    }
+    const route = cleanString(selection?.provider)
+    const model = cleanString(selection?.model)
+    if (route === undefined || model === undefined) {
+      return { known: false, why: 'no default model is configured' }
+    }
+    const groups = await catalog()
+    const group = groups.find(entry => entry.route === route)
+    const listed = group === undefined ? undefined : group.models.includes(model)
+    const overlay = await store.read(route)
+    const health = overlay.health[keyOf(route, model)]
+    const removed = (await removedList()).some(entry => entry.model === model)
+    const status = removed
+      ? 'removed'
+      : health?.status ?? (listed === true ? REASON.OK : 'unknown')
+    const unusable = removed || listed === false || (health !== undefined && UNUSABLE_REASONS.has(health.status))
+    // The replacement is whatever the fallback chain would pick first, so the suggestion
+    // and the automatic behaviour agree instead of being two opinions.
+    let suggestion = null
+    if (unusable) {
+      const chain = await fallbackChain(route, model)
+      const first = chain[0]
+      if (first !== undefined) suggestion = { route: first.route, model: first.model }
+    }
+    return {
+      known: true,
+      route,
+      model,
+      listed,
+      removed,
+      status,
+      detail: health?.detail ?? (removed ? 'taken out of the catalogue' : ''),
+      unusable,
+      suggestion,
+    }
+  }
+
+  /**
    * Move the Session's own model selection, leaving the user's saved default alone.
    *
    * `sessionController.selectModel` validates the target against a registered
@@ -2739,6 +2862,7 @@ export function apply(ctx, rawConfig) {
     scope.on('agent/disposed', ({ agent }) => {
       lastRequest.delete(agent.id)
       pendingRepair.delete(agent.id)
+      pendingReach.delete(agent.id)
       for (const key of fallbacksThisTurn.keys()) if (key.startsWith(`${agent.id}/`)) fallbacksThisTurn.delete(key)
       for (const key of effortHealAttempts) if (key.startsWith(`${agent.id}/`)) effortHealAttempts.delete(key)
     })
@@ -2806,7 +2930,21 @@ export function apply(ctx, rawConfig) {
         // Kept beyond this session: the banner answers "what happened in this turn",
         // the history answers "which model keeps doing this", and only the second can
         // decide that a model does not belong in a fallback chain.
-        recordFailover({ sessionId, ...report })
+        recordFailover({ sessionId, ...report }).then((id) => {
+          // Only a continuation can still prove this switch, so only then is the record
+          // worth watching. `turn` is the turn that was interrupted; the proof must come
+          // from a later one.
+          if (continued.ok !== true) return
+          const to = report.to
+          if (typeof to?.route !== 'string' || typeof to?.model !== 'string') return
+          pendingReach.set(sessionId, {
+            id,
+            route: to.route,
+            model: to.model,
+            turn: typeof record.turn === 'number' ? record.turn : (plan?.turn ?? 0),
+            at: Date.now(),
+          })
+        }, () => {})
       }
       if (plan === undefined) {
         write({ ok: false, why: 'no repair was waiting for the next message' })
@@ -2841,6 +2979,29 @@ export function apply(ctx, rawConfig) {
     }
     diagnostics.bySession[sessionId] = report
     recordFailover({ sessionId, ...report })
+  })
+
+  // ── Proving a continuation: the same record, amended one turn later ──
+  //
+  // The switch is written as `unreached` at the turn boundary because that is all the
+  // evidence supports: the frozen turn cannot be answered by the new model. The
+  // continuation then runs one turn later, so the answer arrives on a turn nobody was
+  // watching. This listener watches for it and amends the record it came from, which is
+  // why the log can finally say "took over" and mean it.
+  ctx.on('session/event', (session, event) => {
+    const sessionId = cleanString(session?.id)
+    if (sessionId === undefined) return
+    const owed = pendingReach.get(sessionId)
+    if (owed === undefined) return
+    if (event?.type !== 'assistant/message') return
+    const source = event.data?.message?.source
+    if (source?.provider !== owed.route || source?.model !== owed.model) return
+    const turn = event.data?.turn
+    // A message for the interrupted turn would be the frozen selection answering, which
+    // is exactly what could not have happened; requiring a later turn keeps the claim honest.
+    if (typeof turn === 'number' && turn <= owed.turn) return
+    pendingReach.delete(sessionId)
+    markSwitchReached(owed.id).catch(() => {})
   })
 
   // ── Counting: every committed model response, exactly once ──
@@ -3153,6 +3314,29 @@ export function apply(ctx, rawConfig) {
                 effortHeals: diagnostics.effortHeals.filter(entry => entry.agent === sessionId).slice(-5),
               })
             }
+            // The model a new session starts on is not ours, but a retired one there makes
+            // every conversation fail on its first message. Reading it is cheap; the write
+            // goes through the owning service so the composition stays the source of truth.
+            case 'defaultModel': {
+              return json({ ok: true, value: await defaultModelStatus() })
+            }
+            case 'setDefaultModel': {
+              const route = cleanString(body?.route)
+              const model = cleanString(body?.model)
+              if (route === undefined || model === undefined) {
+                return json({ ok: false, error: 'setDefaultModel needs route and model' }, 400)
+              }
+              const service = ctx.get('agentDefaultModel')
+              if (service === undefined || typeof service.saveSelection !== 'function') {
+                return json({ ok: false, error: 'this host cannot save a default model' }, 400)
+              }
+              try {
+                await service.saveSelection({ provider: route, model })
+              } catch (error) {
+                return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400)
+              }
+              return json({ ok: true, value: await defaultModelStatus() })
+            }
             // The switch history, kept across sessions. The per-session report above
             // answers "what happened in this turn"; this answers "which model keeps
             // failing", which is the only form of the answer that can change a chain.
@@ -3161,6 +3345,10 @@ export function apply(ctx, rawConfig) {
               const records = (Array.isArray(overlay.records) ? overlay.records : [])
                 .filter(entry => entry !== null && typeof entry === 'object')
                 .slice(0, FAILOVER_LOG_LIMIT)
+                // Records written before this version carry no id, so nothing can ever
+                // correct them. Saying so is better than leaving a reader to wonder why
+                // one old row still says `unreached` while every new one resolves.
+                .map(entry => ({ ...entry, legacy: typeof entry.id !== 'string' }))
               const byModel = new Map()
               for (const record of records) {
                 const model = cleanString(record.from?.model)
@@ -3196,9 +3384,26 @@ export function apply(ctx, rawConfig) {
                   || left.model.localeCompare(right.model))
               return json({ ok: true, value: { records, models } })
             }
+            // Clearing is the one destructive action in this dialog, and a history is
+            // exactly the kind of thing nobody wants to lose to a mis-click. The rows are
+            // moved aside rather than deleted, so the UI can offer an undo for a few
+            // seconds and mean it.
             case 'clearFailover': {
-              await store.update(FAILOVER_DOC, (overlay) => ({ ...overlay, records: [] }))
-              return json({ ok: true })
+              const overlay = await store.read(FAILOVER_DOC)
+              const records = (Array.isArray(overlay.records) ? overlay.records : []).slice(0, FAILOVER_LOG_LIMIT)
+              if (records.length > 0) {
+                await store.update(FAILOVER_ARCHIVE_DOC, (previous) => ({ ...previous, records, at: Date.now() }))
+              }
+              await store.update(FAILOVER_DOC, (previous) => ({ ...previous, records: [] }))
+              return json({ ok: true, value: { archived: records.length } })
+            }
+            case 'undoClearFailover': {
+              const archive = await store.read(FAILOVER_ARCHIVE_DOC)
+              const records = Array.isArray(archive.records) ? archive.records : []
+              if (records.length === 0) return json({ ok: false, error: 'there is nothing to restore' }, 400)
+              await store.update(FAILOVER_DOC, (previous) => ({ ...previous, records }))
+              await store.update(FAILOVER_ARCHIVE_DOC, (previous) => ({ ...previous, records: [] }))
+              return json({ ok: true, value: { restored: records.length } })
             }
             // Taking a model out of the catalogue view. Not a gateway operation —
             // the plugin cannot unregister a model upstream — so it is a local

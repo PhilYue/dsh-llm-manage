@@ -159,13 +159,13 @@ window.__ModuleLoader__.load({
         switchesEmpty: 'No automatic switch has happened yet.',
         switchesRecent: 'Recent switches',
         switchesNote: 'Only proven switches are recorded: which model failed, what it moved to, and whether that ended the failure. A history that could not be cleared would only describe a machine that no longer exists.',
-        switchesReached: 'recovered',
-        switchesUnreached: 'still failed',
+        switchesReached: 'took over',
+        switchesUnreached: 'did not take over',
         switchesElsewhere: 'answered elsewhere',
         switchesSessions: 'sessions',
         switchOpenSession: 'Open this session',
-        outcomeReached: 'recovered',
-        outcomeUnreached: 'did not recover',
+        outcomeReached: 'took over',
+        outcomeUnreached: 'did not take over',
         outcomeElsewhere: 'ran elsewhere',
         filterAll: 'All',
         filterProblem: 'Needs attention',
@@ -269,7 +269,7 @@ window.__ModuleLoader__.load({
         // switch that never reached the model must not read like one that did.
         fallbackTitleReached: 'Model switched',
         fallbackTitleElsewhere: 'Switch did not take effect',
-        fallbackTitleUnreached: 'Model switched — applies from the next message',
+        fallbackTitleUnreached: 'Switched, but this turn did not come back',
         // Per-reason wording. One hardcoded sentence used to claim "exhausted
         // quota" for every cause, including causes that are not about quota.
         fallbackReasonQuota: 'quota exhausted',
@@ -286,6 +286,16 @@ window.__ModuleLoader__.load({
         fallbackTitleEffort: 'Reasoning level repaired and the work was picked back up',
         switchesContinued: 'continued',
         switchesNotContinued: 'not continued',
+        switchesLegacy: 'recorded before this version could resolve it',
+        switchesSteps: '{count} steps',
+        switchesUndo: 'Undo',
+        switchesCleared: 'History cleared.',
+        fallbackReasonUnauthorized: 'this account is not authorized for the model',
+        fallbackReasonNetwork: 'the route could not be reached',
+        bannerHandedOver: 'handed over to {model}',
+        defaultModelWarn: 'New conversations start on {model}, which cannot be called.',
+        defaultModelFix: 'Start them on {model}',
+        defaultModelFixed: 'The default model was updated.',
     policyTitle: 'Automatic handling',
     policyRetry: 'Retry a transient failure before moving',
     policyRetryNote: 'A single 5xx is not a broken model; the harness retries those with its own backoff.',
@@ -437,13 +447,13 @@ window.__ModuleLoader__.load({
         switchesEmpty: '还没有发生过自动切换。',
         switchesRecent: '最近切换',
         switchesNote: '只记录已经证实的切换：哪个模型失败、换到了哪个、是否真的恢复了。不能清空的记录只能描述一台已经不存在的机器。',
-        switchesReached: '已恢复',
-        switchesUnreached: '仍未恢复',
+        switchesReached: '已接管',
+        switchesUnreached: '未接管',
         switchesElsewhere: '落到别处',
         switchesSessions: '个会话',
         switchOpenSession: '打开这个会话',
-        outcomeReached: '已恢复',
-        outcomeUnreached: '未恢复',
+        outcomeReached: '已接管',
+        outcomeUnreached: '未接管',
         outcomeElsewhere: '落到别处',
         filterAll: '全部',
         filterProblem: '需要处理',
@@ -540,7 +550,7 @@ window.__ModuleLoader__.load({
         selected: '当前',
         fallbackTitleReached: '已自动切换模型',
         fallbackTitleElsewhere: '切换未生效',
-        fallbackTitleUnreached: '已切换模型，下一条消息生效',
+        fallbackTitleUnreached: '已换模型，这一轮没接上',
         fallbackReasonQuota: '额度已用尽',
         fallbackReasonRetired: '模型已下线',
         fallbackReasonProtocol: '该路由不支持此模型',
@@ -555,6 +565,16 @@ window.__ModuleLoader__.load({
         fallbackTitleEffort: '已修正推理档位并继续执行',
         switchesContinued: '已继续',
         switchesNotContinued: '未继续',
+        switchesLegacy: '早期记录无法回写结果',
+        switchesSteps: '{count} 步',
+        switchesUndo: '撤销',
+        switchesCleared: '记录已清空。',
+        fallbackReasonUnauthorized: '这个账号没有该模型的权限',
+        fallbackReasonNetwork: '路由连不上',
+        bannerHandedOver: '已由 {model} 接管',
+        defaultModelWarn: '新会话默认使用 {model}，但当前调不通。',
+        defaultModelFix: '改为 {model}',
+        defaultModelFixed: '默认模型已更新。',
     policyTitle: '自动处理',
     policyRetry: '瞬时失败先重试，再考虑换模型',
     policyRetryNote: '一次 5xx 不代表模型坏了，平台会按自己的退避重试。',
@@ -641,6 +661,11 @@ window.__ModuleLoader__.load({
       protocol: { tone: 'bad', en: 'wrong protocol for this route', zh: '协议不匹配' },
       quota: { tone: 'warn', en: 'quota exhausted', zh: '额度已用尽' },
       rate_limited: { tone: 'warn', en: 'API key rate limited', zh: 'API Key 被限流' },
+      // Two failures that used to be filed under 'failed' even though neither is
+      // answered by trying another model: one needs a person to authorize the account,
+      // the other never reached the route at all.
+      unauthorized: { tone: 'bad', en: 'needs authorization', zh: '需要授权' },
+      network: { tone: 'warn', en: 'route unreachable', zh: '路由不可达' },
       error: { tone: 'bad', en: 'failed', zh: '请求失败' },
     }
 
@@ -669,7 +694,8 @@ window.__ModuleLoader__.load({
      * @returns {boolean} true when the model cannot be used.
      */
     function isProblem(status) {
-      return status === 'retired' || status === 'protocol' || status === 'quota' || status === 'error'
+      return status === 'retired' || status === 'protocol' || status === 'quota'
+        || status === 'unauthorized' || status === 'network' || status === 'error'
     }
 
     /**
@@ -1118,6 +1144,18 @@ window.__ModuleLoader__.load({
 .llmm-sw-sub{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}
 .llmm-sw-arrow{flex:none;font-size:11px;color:var(--dsw-alias-label-tertiary)}
 .llmm-sw-note{font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);padding:9px 2px 0}
+/* One incident is several rows: the same session retrying the same dead model.
+   Collapsing them keeps the list readable without hiding the raw evidence. */
+.llmm-sw-incs{display:flex;flex-direction:column;gap:2px}
+.llmm-sw-inc{display:flex;flex-direction:column;border-radius:var(--dsw-radius-sm)}
+.llmm-sw-inc-head{display:flex;align-items:center;gap:8px;min-width:0;padding:3px 2px;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;border-radius:var(--dsw-radius-sm)}
+.llmm-sw-inc-head:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.llmm-sw-inc-steps{flex:none;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+.llmm-sw-inc-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--ds-font-family-code);font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}
+.llmm-sw-inc-body{padding-left:18px;display:flex;flex-direction:column;gap:1px}
+.llmm-sw-legacy{flex:none;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary);font-style:italic}
+.llmm-sw-undo{display:flex;align-items:center;gap:8px;padding:6px 2px 0;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary)}
+.llmm-sw-undo button{border:0;background:none;padding:0;font:inherit;color:var(--dsw-alias-brand-primary);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 /* The Session is where the failure happened, so its name is a link, not decoration:
    underlined because it can be clicked, and capped so a long title cannot push the
    timestamp off the row. */
@@ -1300,7 +1338,22 @@ window.__ModuleLoader__.load({
 .llmm-banner-acts{flex:none;display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .llmm-banner-cont{color:var(--dsw-alias-label-secondary);font-size:11px;line-height:16px}
 .llmm-banner-off{color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px;white-space:nowrap}
+/* A repair that worked is a footnote: one quiet line, no warning colour, no
+   buttons competing with the composer. */
+.llmm-banner-quiet{align-items:center;gap:6px;padding:3px 8px;border:0.5px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-md);background:transparent;color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:16px}
+.llmm-banner-quiet .llmm-banner-mark{color:var(--dsw-alias-state-success-primary)}
+.llmm-banner-quiet-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llmm-banner-quiet-when{flex:none;font-variant-numeric:tabular-nums}
+.llmm-banner-x{flex:none;border:0;background:none;padding:0 2px;color:inherit;font:inherit;line-height:1;cursor:pointer;opacity:.7}
+.llmm-banner-x:hover,.llmm-banner-x:focus-visible{opacity:1;color:var(--dsw-alias-label-secondary)}
 .llmm-btn-quiet{padding:1px 6px;font-size:11px;line-height:16px}
+/* The default model is not this plugin's to configure, but it decides whether the
+   next conversation works at all, so a broken one earns exactly one line here. */
+.llmm-default-warn{display:flex;align-items:center;gap:8px;margin:0 0 8px;padding:6px 10px;border:0.5px solid var(--dsw-alias-state-warn-primary);border-radius:var(--dsw-radius-md);background:color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);color:var(--dsw-alias-state-warn-label);font-size:11px;line-height:16px}
+.llmm-default-warn-text{flex:1;min-width:0}
+.llmm-default-warn button{flex:none;border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.llmm-default-note{margin:0 0 8px;padding:0 2px;font-size:11px;line-height:16px;color:var(--dsw-alias-label-tertiary)}
+
 /* -- The composer controller ------------------------------------------------
    Additive, directly above the composer card. The editor keeps every shipped
    seat (IME, paste, slash adjudication, mentions, attachments); this layer only
@@ -2049,6 +2102,10 @@ window.__ModuleLoader__.load({
       // scoped to its own subtree, and the actions need the label the icon cannot
       // spell — the same reason the panel's icon buttons carry one.
       const [tip, setTip] = useState(null)
+      // The model new sessions start on is not ours, but a dead one there fails every
+      // conversation on its first message. One line, one button, only when it is broken.
+      const [defaultRow, setDefaultRow] = useState(null)
+      const [defaultNote, setDefaultNote] = useState('')
       const tipChannel = useMemo(() => ({
         show: (text, node) => {
           if (!node || typeof node.getBoundingClientRect !== 'function') return
@@ -2117,6 +2174,18 @@ window.__ModuleLoader__.load({
           window.removeEventListener('scroll', onMove, true)
         }
       }, [open, place])
+
+      // Checked when the picker opens rather than on every render: it is one read of
+      // the composition, and the answer only changes when something else changes it.
+      useEffect(() => {
+        if (!open) return undefined
+        let alive = true
+        setDefaultNote('')
+        callHost({ action: 'defaultModel' })
+          .then((data) => { if (alive) setDefaultRow(data.value ?? null) })
+          .catch(() => { if (alive) setDefaultRow(null) })
+        return () => { alive = false }
+      }, [open])
 
       const current = state ? state.current : null
 
@@ -2935,6 +3004,19 @@ window.__ModuleLoader__.load({
         buttons[next].focus()
       }
 
+      const warnDefault = defaultRow !== null && defaultRow.known === true && defaultRow.unusable === true
+      const fixDefault = async () => {
+        const target = defaultRow?.suggestion
+        if (target === null || target === undefined) return
+        try {
+          const answer = await callHost({ action: 'setDefaultModel', route: target.route, model: target.model })
+          if (answer.value !== undefined) setDefaultRow(answer.value)
+          setDefaultNote(t('defaultModelFixed'))
+        } catch {
+          setDefaultNote(t('managerWriteFailed'))
+        }
+      }
+
       const card = h('div', {
         className: 'llmm-menu', style: position, ref: menuRef, role: 'dialog', 'aria-label': t('pickerTitle'),
         onKeyDown: roam,
@@ -2955,6 +3037,17 @@ window.__ModuleLoader__.load({
             onClick: () => setOpen(false),
           }, '\u2715'),
         ),
+        warnDefault
+          ? h('div', { className: 'llmm-default-warn' },
+            h('span', { className: 'llmm-default-warn-text' },
+              t('defaultModelWarn').replace('{model}', defaultRow.model)),
+            defaultRow.suggestion !== null && defaultRow.suggestion !== undefined
+              ? h('button', { type: 'button', onClick: fixDefault },
+                t('defaultModelFix').replace('{model}', defaultRow.suggestion.model))
+              : null)
+          : defaultNote === ''
+            ? null
+            : h('div', { className: 'llmm-default-note' }, defaultNote),
         // Two lists, one switch. The counts sit on the tabs because they are the
         // fastest answer to "is anything in there?" without opening it.
         h('div', { className: 'llmm-tabs', role: 'tablist' },
@@ -3187,7 +3280,9 @@ window.__ModuleLoader__.load({
         : note.reason === 'retired' ? 'Retired'
           : note.reason === 'protocol' ? 'Protocol'
             : note.reason === 'no_adapter' ? 'NoAdapter'
-              : note.reason === 'rate_limited' ? 'RateLimited' : 'Error'}`
+              : note.reason === 'rate_limited' ? 'RateLimited'
+                : note.reason === 'unauthorized' ? 'Unauthorized'
+                  : note.reason === 'network' ? 'Network' : 'Error'}`
       const reason = t(reasonKey)
       // A switch cannot rescue the run that failed — the platform freezes the
       // model for the step that already started — so the only continuation is the
@@ -3196,7 +3291,9 @@ window.__ModuleLoader__.load({
       // A continuation that already happened makes this button a lie: the turn is
       // queued, and handing over a draft would ask the person to send the same request
       // twice.
-      const continuable = outcome === 'reached'
+      // Offered exactly when the work stopped: a turn that came back on the new model
+      // needs nothing, and offering to "continue" it was the old banner's lie.
+      const continuable = outcome !== 'reached'
         && continued !== true
         && props?.inputActions !== undefined
         && typeof props.inputActions.setDraft === 'function'
@@ -3209,6 +3306,40 @@ window.__ModuleLoader__.load({
         setBusy(action)
         try { await callHost({ action, sessionId, ...body }) } catch { /* advisory */ } finally { setBusy('') }
       }
+      // A switch that landed and was picked back up is good news, and good news that
+      // occupies the width of the conversation gets read as a warning. It becomes one
+      // quiet line that can be dismissed; only a turn that never came back earns the
+      // full banner, and that banner leads with the outcome instead of the mechanism.
+      if (continued || outcome === 'reached') {
+        return h(React.Fragment, null,
+          h(Style),
+          h('div', { className: 'llmm-root llmm-banner llmm-banner-quiet', role: 'status' },
+            h('span', { className: 'llmm-banner-mark', 'aria-hidden': true }, '\u21c4'),
+            h('span', { className: 'llmm-banner-quiet-text' },
+              t('bannerHandedOver').replace('{model}', note.to?.model ?? to)),
+            h('span', { className: 'llmm-banner-quiet-when' }, ageOf(note.at)),
+            // Undo stays reachable without turning the line back into a banner: moving a
+            // Session to another model is a real change, and a footnote is still a place
+            // a person can look after they notice it.
+            note.from !== undefined && note.from !== null
+              ? h('button', {
+                type: 'button',
+                className: 'llmm-banner-x llmm-banner-undo',
+                title: t('fallbackRevert'),
+                'aria-label': t('fallbackRevert'),
+                disabled: busy !== '',
+                onClick: () => run('fallbackRevert', { route: note.from.route, model: note.from.model }),
+              }, '↩')
+              : null,
+            h('button', {
+              type: 'button',
+              className: 'llmm-banner-x',
+              title: t('dismiss'),
+              'aria-label': t('dismiss'),
+              onClick: () => setHiddenAt(note.at),
+            }, '\u00d7')))
+      }
+
       return h(React.Fragment, null,
         h(Style),
         h('div', { className: 'llmm-root llmm-banner', role: 'status' },
@@ -3392,6 +3523,13 @@ window.__ModuleLoader__.load({
       const [snap, setSnap] = useState(null)
       const [records, setRecords] = useState([])
       const [failovers, setFailovers] = useState({ records: [], models: [] })
+      // Clearing is reversible for a few seconds, and saying so is cheaper than a
+      // confirmation dialog that every later clear has to pay for.
+      const [clearedAt, setClearedAt] = useState(0)
+      // Which incident cards are open. A set, not an index: comparing two incidents is
+      // the reason to open a second one, and closing the first on that click would make
+      // the comparison impossible.
+      const [openIncidents, setOpenIncidents] = useState(() => new Set())
       const requestedTab = useSyncExternalStore(managerStore.subscribe, managerStore.tab, managerStore.tab)
       const [tab, setTab] = useState(() => managerStore.tab())
       const [query, setQuery] = useState('')
@@ -3782,6 +3920,25 @@ window.__ModuleLoader__.load({
         try {
           await callHost({ action: 'clearFailover' })
           setFailovers({ records: [], models: [] })
+          setClearedAt(Date.now())
+        } catch (failure) {
+          if (isStaleHost(failure)) setStale(true)
+          else setError(t('managerWriteFailed'))
+        } finally {
+          setBusy('')
+        }
+      }
+
+      // The rows are archived host-side, so undo is a real restore rather than a
+      // redraw of something that was already deleted.
+      const undoClearSwitches = async () => {
+        setBusy('undo-switches')
+        setError('')
+        try {
+          await callHost({ action: 'undoClearFailover' })
+          setClearedAt(0)
+          const data = await callHost({ action: 'failoverHistory' })
+          if (data.value !== undefined) setFailovers(data.value)
         } catch (failure) {
           if (isStaleHost(failure)) setStale(true)
           else setError(t('managerWriteFailed'))
@@ -4185,6 +4342,67 @@ window.__ModuleLoader__.load({
         return String(sessionId ?? '').slice(0, 8)
       }
 
+      // One row per raw record, reused by the incident cards and by the flat list.
+      const switchEventRow = (record, index) => h('div', {
+        className: 'llmm-sw-row llmm-sw-event',
+        key: `${record.at}-${index}`,
+      },
+        h('span', { className: `llmm-dot ${record.outcome === 'reached' ? 'ok' : 'bad'}` }),
+        h('span', { className: 'llmm-mg-name' }, record.from?.model ?? ''),
+        h('span', { className: 'llmm-sw-arrow' }, '\u2192'),
+        h('span', { className: 'llmm-mg-name' }, record.to?.model ?? ''),
+        h('span', { className: 'llmm-mg-sub' }, `${statusLabel(record.reason)} \u00b7 ${outcomeLabel(record.outcome)}`),
+        // The Session is where the failure happened, so the history row is the
+        // only place a reader can go and look at it. The id stays in the title,
+        // because two Sessions may share a title and the id is what is unique.
+        typeof record.sessionId !== 'string' || record.sessionId === ''
+          ? null
+          : canOpenSession
+            ? h('button', {
+              type: 'button',
+              className: 'llmm-sw-session',
+              title: `${t('switchOpenSession')} \u00b7 ${record.sessionId}`,
+              onClick: () => openSessionRow(record.sessionId),
+            }, sessionLabel(record.sessionId))
+            : h('span', {
+              className: 'llmm-sw-session llmm-sw-session-flat',
+              title: record.sessionId,
+            }, sessionLabel(record.sessionId)),
+        // Whether the work was picked back up separates a repair that rescued the
+        // run from one that only moved it.
+        typeof record.continued !== 'boolean'
+          ? null
+          : h('span', {
+            className: `llmm-sw-sub llmm-sw-continued${record.continued === true ? ' llmm-sw-ok' : ''}`,
+            title: typeof record.continueRefused === 'string' ? record.continueRefused : '',
+          }, t(record.continued === true ? 'switchesContinued' : 'switchesNotContinued')),
+        // Rows written before results could be written back can never resolve; saying
+        // so beats leaving a reader to wonder why this one still says "did not take over".
+        record.legacy === true
+          ? h('span', { className: 'llmm-sw-legacy' }, t('switchesLegacy'))
+          : null,
+        h('span', { className: 'llmm-mg-when' }, record.at > 0 ? ageOf(record.at) : ''),
+      )
+
+      // Several rows from the same Session a minute apart are one incident — the same
+      // dead model being retried — not three independent events. They collapse into a
+      // card whose head states the outcome; the raw rows stay one click away because
+      // they are the evidence and the summary is only the account of it.
+      const incidents = []
+      for (const record of failovers.records.slice(0, 24)) {
+        const last = incidents[incidents.length - 1]
+        const sameSession = last !== undefined
+          && typeof record.sessionId === 'string'
+          && record.sessionId === last.sessionId
+        const recent = last !== undefined && Math.abs(last.at - (record.at ?? 0)) <= 5 * 60 * 1000
+        if (sameSession && recent) {
+          last.rows.push(record)
+          last.at = Math.max(last.at, record.at ?? 0)
+        } else {
+          incidents.push({ sessionId: record.sessionId, at: record.at ?? 0, rows: [record] })
+        }
+      }
+
       const switchesView = h(React.Fragment, null,
         h('div', { className: 'llmm-sw-head' },
           h('span', { className: 'llmm-sw-title' }, t('switchesModels')),
@@ -4195,6 +4413,13 @@ window.__ModuleLoader__.load({
             disabled: busy !== '' || failovers.records.length === 0,
             onClick: clearSwitches,
           }, t('switchesClear'))),
+        busy === 'clear-switches' && clearedAt > 0
+          ? null
+          : clearedAt > 0 && Date.now() - clearedAt < 30000
+            ? h('div', { className: 'llmm-sw-undo' },
+              h('span', null, t('switchesCleared')),
+              h('button', { type: 'button', onClick: undoClearSwitches }, t('switchesUndo')))
+            : null,
         failovers.records.length === 0
           ? h('div', { className: 'llmm-mg-empty' }, t('switchesEmpty'))
           : h(React.Fragment, null,
@@ -4209,48 +4434,46 @@ window.__ModuleLoader__.load({
               stat.sessions > 0
                 ? h('span', { className: 'llmm-sw-sub' }, `${stat.sessions} ${t('switchesSessions')}`)
                 : null,
+              // Only the leading cause earns a word here; the full histogram was a row
+              // of counts nobody could act on.
               Object.keys(stat.reasons ?? {}).length === 0
                 ? null
-                : h('span', { className: 'llmm-mg-sub' }, Object.keys(stat.reasons).map((reason) => `${statusLabel(reason)}×${stat.reasons[reason]}`).join(' · ')),
+                : h('span', { className: 'llmm-mg-sub' }, statusLabel(
+                  Object.keys(stat.reasons).sort((a, b) => stat.reasons[b] - stat.reasons[a])[0],
+                )),
               h('span', { className: 'llmm-mg-when' }, stat.lastAt > 0 ? ageOf(stat.lastAt) : ''),
             ))),
             h('div', { className: 'llmm-sw-title' }, t('switchesRecent')),
-            h('div', { className: 'llmm-sw-log' }, failovers.records.slice(0, 12).map((record, index) => h('div', {
-              className: 'llmm-sw-row llmm-sw-event',
-              key: `${record.at}-${index}`,
-            },
-              h('span', { className: `llmm-dot ${record.outcome === 'reached' ? 'ok' : 'bad'}` }),
-              h('span', { className: 'llmm-mg-name' }, record.from?.model ?? ''),
-              h('span', { className: 'llmm-sw-arrow' }, '\u2192'),
-              h('span', { className: 'llmm-mg-name' }, record.to?.model ?? ''),
-              h('span', { className: 'llmm-mg-sub' }, `${statusLabel(record.reason)} \u00b7 ${outcomeLabel(record.outcome)}`),
-              // The Session is where the failure happened, so the history row is the
-              // only place a reader can go and look at it. The id stays in the title,
-              // because two Sessions may share a title and the id is what is unique.
-              typeof record.sessionId !== 'string' || record.sessionId === ''
-                ? null
-                : canOpenSession
-                  ? h('button', {
-                    type: 'button',
-                    className: 'llmm-sw-session',
-                    title: `${t('switchOpenSession')} \u00b7 ${record.sessionId}`,
-                    onClick: () => openSessionRow(record.sessionId),
-                  }, sessionLabel(record.sessionId))
-                  : h('span', {
-                    className: 'llmm-sw-session llmm-sw-session-flat',
-                    title: record.sessionId,
-                  }, sessionLabel(record.sessionId)),
-              // Whether the work was picked back up separates a repair that rescued the
-              // run from one that only moved it: the counts above cannot tell these
-              // apart, and it is the difference the person actually feels.
-              typeof record.continued !== 'boolean'
-                ? null
-                : h('span', {
-                  className: `llmm-sw-sub llmm-sw-continued${record.continued === true ? ' llmm-sw-ok' : ''}`,
-                  title: typeof record.continueRefused === 'string' ? record.continueRefused : '',
-                }, t(record.continued === true ? 'switchesContinued' : 'switchesNotContinued')),
-              h('span', { className: 'llmm-mg-when' }, record.at > 0 ? ageOf(record.at) : ''),
-            )))),
+            h('div', { className: 'llmm-sw-log llmm-sw-incs' }, incidents.map((incident, index) => {
+              const head = incident.rows[0]
+              const settled = incident.rows.some(entry => entry.outcome === 'reached')
+              const open = openIncidents.has(index)
+              return h('div', { className: 'llmm-sw-inc', key: `${incident.at}-${index}` },
+                h('button', {
+                  type: 'button',
+                  className: 'llmm-sw-inc-head',
+                  'aria-expanded': open,
+                  onClick: () => setOpenIncidents((previous) => {
+                    const next = new Set(previous)
+                    if (next.has(index)) next.delete(index)
+                    else next.add(index)
+                    return next
+                  }),
+                },
+                  h('span', { className: `llmm-dot ${settled ? 'ok' : 'bad'}` }),
+                  typeof incident.sessionId === 'string' && incident.sessionId !== ''
+                    ? h('span', { className: 'llmm-sw-session llmm-sw-session-flat' }, sessionLabel(incident.sessionId))
+                    : null,
+                  h('span', { className: 'llmm-sw-inc-steps' }, t('switchesSteps').replace('{count}', String(incident.rows.length))),
+                  h('span', { className: 'llmm-sw-inc-path' },
+                    `${head.from?.model ?? ''} \u2192 ${head.to?.model ?? ''}`),
+                  h('span', { className: 'llmm-sw-sub' }, statusLabel(head.reason)),
+                  h('span', { className: 'llmm-mg-when' }, incident.at > 0 ? ageOf(incident.at) : '')),
+                open
+                  ? h('div', { className: 'llmm-sw-inc-body' }, incident.rows.map(switchEventRow))
+                  : null)
+            })),
+            ),
         h('div', { className: 'llmm-sw-note' }, t('switchesNote')),
       )
 
